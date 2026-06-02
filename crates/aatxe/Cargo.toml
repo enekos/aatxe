@@ -1,0 +1,33 @@
+[package]
+name = "aatxe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Statistical microbenchmark + regression-gate CLI for TypeScript, Go, and Rust"
+
+[[bin]]
+name = "aatxe"
+path = "src/main.rs"
+
+[dependencies]
+aatxe-core = { path = "../aatxe-core" }
+aatxe-ast = { path = "../aatxe-ast" }
+aatxe-council = { path = "../aatxe-council" }
+aatxe-evals = { path = "../aatxe-evals" }
+aatxe-learn = { path = "../aatxe-learn" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+ureq = { workspace = true }
+regex = { workspace = true }
+walkdir = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.13"

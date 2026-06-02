@@ -1,0 +1,16 @@
+{
+  "name": "correctness-null-deref",
+  "description": "Replaces a panic-on-None with an unsafe null-pointer dereference. Definite UB.",
+  "diff": "correctness-null-deref.diff",
+  "expected": [
+    {
+      "file": "src/runtime/exec.rs",
+      "lineRange": [3, 8],
+      "severity": "critical",
+      "category": "correctness",
+      "description": "dereferences a null pointer in an `unsafe` block — undefined behaviour",
+      "mustCatch": true
+    }
+  ],
+  "forbidden": []
+}

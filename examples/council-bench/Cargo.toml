@@ -1,0 +1,14 @@
+[package]
+name = "aatxe-example-council-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "aatxe-council-bench"
+path = "src/main.rs"
+
+[dependencies]
+aatxe-bench = { path = "../../sdk/rust" }
+aatxe-council = { path = "../../crates/aatxe-council" }
+aatxe-core = { path = "../../crates/aatxe-core" }

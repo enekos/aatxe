@@ -1,0 +1,21 @@
+diff --git a/docs/architecture.md b/docs/architecture.md
+new file mode 100644
+index 0000000..ddddddd
+--- /dev/null
++++ b/docs/architecture.md
+@@ -0,0 +1,5 @@
++# Architecture
++
++TODO: write this.
++
++(Adding the file so the link in README.md doesn't 404.)
+diff --git a/README.md b/README.md
+index eeeeeee..fffffff 100644
+--- a/README.md
++++ b/README.md
+@@ -10,3 +10,5 @@ A small service.
+
+ ## License
+ MIT.
++
++See [docs/architecture.md](docs/architecture.md) for the architecture overview.

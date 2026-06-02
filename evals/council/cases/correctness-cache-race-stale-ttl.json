@@ -1,0 +1,34 @@
+{
+  "name": "correctness-cache-race-stale-ttl",
+  "description": "Go PR adding an in-process TTL cache to a user repo. The new cache.go has zero mutex protection around its map (Go panics on concurrent map read/write), and repo.go violates the file-level locking invariant — documented in the package comment at lines 1–7 of repo.go — by writing the cache from Get under an RLock. The package comment is only visible with full-file context; reviewers seeing only the hunk won't know about the contract.",
+  "diff": "correctness-cache-race-stale-ttl.diff",
+  "filesDir": "files/correctness-cache-race-stale-ttl",
+  "expected": [
+    {
+      "file": "internal/users/cache.go",
+      "lineRange": [16, 44],
+      "severity": "critical",
+      "category": "correctness",
+      "description": "Cache.Lookup and Cache.Put both read/write `c.entries` (a Go map) with no synchronisation. The package-level comment claims read-path can be lock-free 'because Repo.Set is the only writer' — but Put is also called from Repo.Get on cache miss, so multiple goroutines concurrently mutate the map. Triggers `fatal error: concurrent map read and map write` under load.",
+      "mustCatch": true
+    },
+    {
+      "file": "internal/users/repo.go",
+      "lineRange": [47, 52],
+      "severity": "major",
+      "category": "correctness",
+      "description": "Repo.Get calls `r.cache.Put(id, u)` while holding only `r.mu.RLock()`. The file's package comment (lines 4–7) explicitly states 'every read AND every write must acquire mu' as a write — this hunk silently violates that invariant, allowing multiple reader goroutines to mutate the cache map concurrently.",
+      "mustCatch": true
+    },
+    {
+      "file": "internal/users/cache.go",
+      "lineRange": [16, 44],
+      "severity": "minor",
+      "category": "maintainability",
+      "description": "Cache has no eviction or compaction — entries beyond their TTL stay in the map forever, so memory grows unbounded over time. Lookup correctly rejects expired entries but Put never reclaims their slot.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 8
+}

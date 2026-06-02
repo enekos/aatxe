@@ -1,0 +1,165 @@
+# Reusable workflow that runs the aatxe agent council **with the learning
+# corpus loop closed**: each invocation downloads the latest corpus
+# artifact, runs the council with that corpus injected into prompts,
+# harvests fresh feedback from the PR's comments + reactions, compacts
+# the corpus, and re-uploads it as the new artifact.
+#
+# Two artifacts round-trip between runs:
+#   * `aatxe-learning-corpus` — the JSON corpus itself. One per repo,
+#                               replaced each run with the merged + compacted
+#                               version. Self-healing: a missing or
+#                               malformed corpus degrades to a fresh empty
+#                               one (never an error).
+#   * `aatxe-council-report`  — the council's JSON output, used by the
+#                               harvest step to map `aatxe: good catch on N`
+#                               directives back to specific findings.
+#
+# Usage from a consuming repo:
+#
+#   jobs:
+#     review:
+#       uses: enekos/aatxe/.github/workflows/aatxe-learn.yml@main
+#       with:
+#         confidence-floor: '0.55'
+#         fail-on-critical: true
+#       secrets:
+#         KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+
+name: aatxe-learn
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: "Kimi model id (default kimi-k2.6)"
+        required: false
+        default: 'kimi-k2.6'
+        type: string
+      confidence-floor:
+        description: "Hide council findings below this judge confidence (0..1)"
+        required: false
+        default: '0.55'
+        type: string
+      learning-max-entries:
+        description: "Hard cap on corpus entries kept after compaction"
+        required: false
+        default: '100'
+        type: string
+      learning-inject-entries:
+        description: "How many corpus entries to inject into proposer/judge prompts"
+        required: false
+        default: '8'
+        type: string
+      learning-min-score:
+        description: "Drop entries scoring below this during compaction"
+        required: false
+        default: '0.1'
+        type: string
+      fail-on-critical:
+        description: "Exit 2 (fail the job) when a critical finding survives"
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      KIMI_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read   # required to download artifacts from prior runs
+
+jobs:
+  council-with-learning:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout HEAD
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ runner.temp }}/aatxe-src
+
+      - name: Install aatxe CLI
+        run: |
+          git clone --depth 1 https://github.com/enekos/aatxe "${RUNNER_TEMP}/aatxe-src"
+          cargo install --path "${RUNNER_TEMP}/aatxe-src/crates/aatxe" --locked
+
+      # Download the previous corpus artifact if one exists. The
+      # download-artifact action's `merge-multiple` + `pattern` semantics
+      # mean we silently no-op when nothing is uploaded yet — the CLI's
+      # self-healing load then handles the "missing file" path.
+      - name: Download latest learning corpus
+        id: corpus
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: aatxe-learning-corpus
+          path: .aatxe
+          workflow_conclusion: ''  # any conclusion, including in-progress
+          if_no_artifact_found: warn
+          search_artifacts: true
+          check_artifacts: true
+
+      - name: Ensure corpus path exists
+        run: |
+          mkdir -p .aatxe
+          if [ ! -f .aatxe/aatxe-learning-corpus.json ]; then
+            echo "no prior corpus — bootstrapping empty"
+            echo '{}' > .aatxe/aatxe-learning-corpus.json
+          fi
+
+      - name: Run council with corpus injection
+        env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gate=""
+          if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
+            gate="--fail-on-critical"
+          fi
+          aatxe council \
+            --pr ${{ github.event.pull_request.number }} \
+            --model "${{ inputs.model }}" \
+            --confidence-floor "${{ inputs.confidence-floor }}" \
+            --learning-corpus .aatxe/aatxe-learning-corpus.json \
+            --learning-max-entries "${{ inputs.learning-inject-entries }}" \
+            --out .aatxe/aatxe-council.json \
+            --markdown .aatxe/aatxe-council.md \
+            --post \
+            $gate
+
+      - name: Harvest fresh feedback from PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          aatxe learn harvest \
+            --corpus .aatxe/aatxe-learning-corpus.json \
+            --pr ${{ github.event.pull_request.number }} \
+            --council-report .aatxe/aatxe-council.json \
+            --max-entries "${{ inputs.learning-max-entries }}" \
+            --min-score "${{ inputs.learning-min-score }}"
+
+      - name: Show updated corpus
+        run: aatxe learn show --corpus .aatxe/aatxe-learning-corpus.json
+
+      - name: Upload updated learning corpus
+        uses: actions/upload-artifact@v4
+        with:
+          name: aatxe-learning-corpus
+          path: .aatxe/aatxe-learning-corpus.json
+          retention-days: 90
+          overwrite: true
+
+      - name: Upload council report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aatxe-council-report
+          path: .aatxe/aatxe-council.json
+          retention-days: 30
+          overwrite: true

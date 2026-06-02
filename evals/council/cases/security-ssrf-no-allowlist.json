@@ -1,0 +1,24 @@
+{
+  "name": "security-ssrf-no-allowlist",
+  "description": "Outbound HTTP function with no URL host allowlist plus an explicit allow_any_host() helper. SSRF primitive.",
+  "diff": "security-ssrf-no-allowlist.diff",
+  "expected": [
+    {
+      "file": "src/fetch/http.rs",
+      "lineRange": [10, 18],
+      "severity": "major",
+      "category": "security",
+      "description": "no URL/host allowlist on outbound fetch; allow_any_host() hard-codes true",
+      "mustCatch": true
+    },
+    {
+      "file": "src/fetch/http.rs",
+      "lineRange": [4, 9],
+      "severity": "major",
+      "category": "performance",
+      "description": "10-iteration serial loop multiplies tail latency 10x",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": []
+}

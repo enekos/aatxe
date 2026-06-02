@@ -1,0 +1,20 @@
+{
+  "description": "Aatxe council eval corpus — labeled PR diff fixtures. Each entry points to a JSON case file (alongside this index) that carries the ground truth.",
+  "cases": [
+    "security-password-logged.json",
+    "security-ssrf-no-allowlist.json",
+    "correctness-null-deref.json",
+    "correctness-off-by-one.json",
+    "correctness-unwrap-in-handler.json",
+    "perf-n-plus-one.json",
+    "maintainability-todo-doc.json",
+    "clean-tiny-rename.json",
+    "clean-doc-typo.json",
+    "forbidden-generated-code.json",
+    "security-jwt-fallback-secret.json",
+    "correctness-cache-race-stale-ttl.json",
+    "perf-django-export-n-plus-one.json",
+    "security-authz-idor-export-route.json",
+    "maintainability-rust-reinvents-counters.json"
+  ]
+}

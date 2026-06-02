@@ -1,0 +1,102 @@
+# aatxe-evals — the eval harness gate.
+#
+# Two surfaces, both exercised here:
+#   * stats engine evals: synthetic A/B benchmark pairs with known ground
+#     truth. Pure-Rust, deterministic. Always runs.
+#   * council quality evals: labeled diff fixtures in evals/council/cases/.
+#     Stub LLM by default — proves the harness is wired correctly without
+#     burning Moonshot quota. Flip to real Kimi via workflow_dispatch input
+#     `use-real-kimi=true` plus a `KIMI_API_KEY` repo secret.
+#
+# The PR job gates on `evals/council/baselines/stub.json`: any headline
+# metric (critical recall, critical precision, severity calibration, judge
+# Brier, FP/case, null FPR, etc.) that regresses past tolerance fails the
+# build with exit code 2.
+
+name: aatxe-evals
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      use-real-kimi:
+        description: "Set to 'true' to call the real Kimi API (otherwise the stub LLM is used)"
+        required: false
+        default: 'false'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build aatxe
+        run: cargo build --release -p aatxe
+
+      - name: Decide stub vs real Kimi
+        id: mode
+        env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          USE_REAL: ${{ github.event.inputs.use-real-kimi }}
+        run: |
+          if [ "$USE_REAL" = "true" ] && [ -n "$KIMI_API_KEY" ]; then
+            echo "real_llm=1" >> "$GITHUB_OUTPUT"
+            echo "    → using real Kimi"
+          else
+            echo "real_llm=0" >> "$GITHUB_OUTPUT"
+            echo "    → using stub LLM"
+          fi
+
+      - name: Run evals (stub mode + baseline gate)
+        if: steps.mode.outputs.real_llm == '0'
+        env:
+          AATXE_COUNCIL_STUB: '1'
+        run: |
+          mkdir -p tmp
+          ./target/release/aatxe evals \
+            --out tmp/aatxe-evals.json \
+            --markdown tmp/aatxe-evals.md \
+            --baseline evals/council/baselines/stub.json
+
+      - name: Run evals (real Kimi, no gate — informational)
+        if: steps.mode.outputs.real_llm == '1'
+        env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          KIMI_BASE_URL: ${{ secrets.KIMI_BASE_URL }}
+          KIMI_MODEL: ${{ secrets.KIMI_MODEL }}
+        run: |
+          mkdir -p tmp
+          ./target/release/aatxe evals \
+            --council-real-llm \
+            --out tmp/aatxe-evals-real.json \
+            --markdown tmp/aatxe-evals-real.md \
+            --no-fail
+
+      - name: Print summary
+        if: always()
+        run: |
+          for f in tmp/aatxe-evals.md tmp/aatxe-evals-real.md; do
+            if [ -f "$f" ]; then
+              echo "=== $f ==="
+              head -80 "$f"
+              echo
+            fi
+          done
+
+      - name: Upload artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aatxe-evals
+          path: tmp/aatxe-evals*.json

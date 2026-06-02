@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aatxe-core",
+    "crates/aatxe",
+    "crates/aatxe-ast",
+    "crates/aatxe-council",
+    "crates/aatxe-evals",
+    "crates/aatxe-learn",
+    "sdk/rust",
+    "examples/rust-example",
+    "examples/council-bench",
+    "examples/big-diff-bench",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/enekos/aatxe"
+description = "Statistical microbenchmark + regression-gate harness for TS, Go, and Rust"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+ureq = { version = "2.10", features = ["json"] }
+regex = "1.10"
+walkdir = "2.5"
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "serde"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

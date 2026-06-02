@@ -1,0 +1,27 @@
+[package]
+name = "aatxe-ast"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "AST-based scope inspection (tree-sitter for TS/Go/Rust) so the aatxe council reasons about symbol-level scope, not flat text. Pure: no IO."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+aatxe-core = { path = "../aatxe-core" }
+regex = { workspace = true }
+once_cell = "1.20"
+
+tree-sitter = { version = "0.22", optional = true }
+tree-sitter-typescript = { version = "0.21", optional = true }
+tree-sitter-go = { version = "0.21", optional = true }
+tree-sitter-rust = { version = "0.21", optional = true }
+
+[features]
+default = ["lang-ts", "lang-go", "lang-rust"]
+lang-ts = ["dep:tree-sitter", "dep:tree-sitter-typescript"]
+lang-go = ["dep:tree-sitter", "dep:tree-sitter-go"]
+lang-rust = ["dep:tree-sitter", "dep:tree-sitter-rust"]

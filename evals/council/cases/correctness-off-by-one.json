@@ -1,0 +1,16 @@
+{
+  "name": "correctness-off-by-one",
+  "description": "Replaces `for i in 0..n` with `for i in 0..=n`, reading and writing one element past the requested length. Classic OBO.",
+  "diff": "correctness-off-by-one.diff",
+  "expected": [
+    {
+      "file": "src/index/window.rs",
+      "lineRange": [3, 6],
+      "severity": "major",
+      "category": "correctness",
+      "description": "loop bound changed from 0..n to 0..=n; reads/writes one past the end",
+      "mustCatch": true
+    }
+  ],
+  "forbidden": []
+}

@@ -1,0 +1,146 @@
+# Reusable workflow downstream services can call to run aatxe.
+#
+# Usage from a consuming repo:
+#
+#   jobs:
+#     perf:
+#       uses: enekos/aatxe/.github/workflows/aatxe.yml@main
+#       with:
+#         lang: ts        # one of: ts | go | rust
+#         service: my-svc
+#         affected: true  # restrict to benches affected by the PR diff
+#       permissions:
+#         pull-requests: write
+#
+# What this workflow does:
+#   1. Checks out HEAD and runs benches → /tmp/head.json
+#   2. Checks out base (PR base ref) and runs benches → /tmp/base.json
+#   3. Compares them with the configured threshold and significance
+#   4. Posts (or updates) the sticky aatxe comment on the PR
+#   5. Fails the lane (exit 2) if any bench regressed
+
+name: aatxe
+
+on:
+  workflow_call:
+    inputs:
+      lang:
+        description: "Language adapter (ts | go | rust)"
+        required: true
+        type: string
+      service:
+        description: "Service name embedded in the report"
+        required: true
+        type: string
+      affected:
+        description: "Restrict head run to benches affected by the PR diff"
+        required: false
+        default: false
+        type: boolean
+      threshold:
+        description: "Median-delta threshold (fraction)"
+        required: false
+        default: '0.05'
+        type: string
+      alpha:
+        description: "Mann-Whitney U significance level"
+        required: false
+        default: '0.05'
+        type: string
+      runner-cmd:
+        description: "Optional override for the language runner command"
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  aatxe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout HEAD
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node (TS)
+        if: inputs.lang == 'ts'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Go (Go)
+        if: inputs.lang == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Setup Rust (Rust)
+        if: inputs.lang == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install aatxe CLI
+        run: |
+          # In real usage, replace this with a release-asset download.
+          # For now we build from the workflow's own ref.
+          git clone --depth 1 https://github.com/enekos/aatxe /tmp/aatxe
+          cargo install --path /tmp/aatxe/crates/aatxe --locked
+
+      - name: Bench HEAD
+        env:
+          AATXE_TS_RUNNER: ${{ inputs.runner-cmd }}
+          AATXE_GO_RUNNER: ${{ inputs.runner-cmd }}
+          AATXE_RUST_RUNNER: ${{ inputs.runner-cmd }}
+        run: |
+          if [[ "${{ inputs.affected }}" == "true" ]]; then
+            aatxe run --lang ${{ inputs.lang }} \
+              --service "${{ inputs.service }}" \
+              --affected --base "origin/${{ github.base_ref }}" \
+              --out /tmp/head.json
+          else
+            aatxe run --lang ${{ inputs.lang }} \
+              --service "${{ inputs.service }}" \
+              --out /tmp/head.json
+          fi
+
+      - name: Checkout base
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          git checkout "origin/${{ github.base_ref }}"
+
+      - name: Bench base
+        env:
+          AATXE_TS_RUNNER: ${{ inputs.runner-cmd }}
+          AATXE_GO_RUNNER: ${{ inputs.runner-cmd }}
+          AATXE_RUST_RUNNER: ${{ inputs.runner-cmd }}
+        run: |
+          aatxe run --lang ${{ inputs.lang }} \
+            --service "${{ inputs.service }}" \
+            --out /tmp/base.json
+
+      - name: Compare + render markdown
+        run: |
+          aatxe compare \
+            --base /tmp/base.json --head /tmp/head.json \
+            --threshold ${{ inputs.threshold }} \
+            --alpha ${{ inputs.alpha }} \
+            --markdown /tmp/aatxe-report.md \
+            --out /tmp/aatxe-report.json \
+            --fail-on-regression
+        # Continue even if the compare exits non-zero (code 2) so the comment still posts.
+        continue-on-error: true
+        id: compare
+
+      - name: Upsert sticky PR comment
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          aatxe comment --report /tmp/aatxe-report.md
+
+      - name: Gate on regressions
+        if: steps.compare.outcome == 'failure'
+        run: exit 2

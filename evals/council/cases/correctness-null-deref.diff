@@ -1,0 +1,13 @@
+diff --git a/src/runtime/exec.rs b/src/runtime/exec.rs
+index 7777777..8888888 100644
+--- a/src/runtime/exec.rs
++++ b/src/runtime/exec.rs
+@@ -3,7 +3,9 @@ pub fn first_byte(buf: Option<&[u8]>) -> u8 {
+-    buf.unwrap()[0]
++    unsafe {
++        let p: *const u8 = std::ptr::null();
++        *p
++    }
+ }
+
+ pub fn label() -> &'static str {

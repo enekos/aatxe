@@ -1,0 +1,9 @@
+{
+  "name": "aatxe-example-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aatxe/bench": "file:../../sdk/ts"
+  }
+}

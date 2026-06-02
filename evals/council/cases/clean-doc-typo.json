@@ -1,0 +1,8 @@
+{
+  "name": "clean-doc-typo",
+  "description": "Single doc typo fix in README.md. Should produce zero shippable findings.",
+  "diff": "clean-doc-typo.diff",
+  "expected": [],
+  "forbidden": [],
+  "maxFindings": 0
+}

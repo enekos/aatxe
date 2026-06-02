@@ -1,0 +1,13 @@
+diff --git a/README.md b/README.md
+index 5050505..6060606 100644
+--- a/README.md
++++ b/README.md
+@@ -5,7 +5,7 @@
+
+ A small service.
+
+-We aim to be relibale.
++We aim to be reliable.
+
+ ## License
+ MIT.

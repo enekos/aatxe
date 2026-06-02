@@ -1,0 +1,16 @@
+{
+  "name": "perf-n-plus-one",
+  "description": "Replaces a batched WHERE IN query with a per-id query in a loop. N+1 access pattern.",
+  "diff": "perf-n-plus-one.diff",
+  "expected": [
+    {
+      "file": "src/users/loader.rs",
+      "lineRange": [5, 13],
+      "severity": "major",
+      "category": "performance",
+      "description": "N+1 — issues one query per id where a single batched query existed before",
+      "mustCatch": true
+    }
+  ],
+  "forbidden": []
+}

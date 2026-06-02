@@ -1,0 +1,8 @@
+{
+  "name": "clean-tiny-rename",
+  "description": "Renames a public function. No behaviour change, no callers to update outside this module. Council should produce ≤1 nit-or-below finding.",
+  "diff": "clean-tiny-rename.diff",
+  "expected": [],
+  "forbidden": [],
+  "maxFindings": 1
+}

@@ -1,0 +1,12 @@
+diff --git a/src/index/window.rs b/src/index/window.rs
+index 9999999..aaaaaaa 100644
+--- a/src/index/window.rs
++++ b/src/index/window.rs
+@@ -3,8 +3,8 @@ pub fn copy_n(src: &[u8], dst: &mut [u8], n: usize) {
+-    for i in 0..n {
+-        dst[i] = src[i];
++    for i in 0..=n {
++        dst[i] = src[i];
+     }
+ }
+

@@ -1,0 +1,10 @@
+diff --git a/src/api/handlers.rs b/src/api/handlers.rs
+index 7070707..8080808 100644
+--- a/src/api/handlers.rs
++++ b/src/api/handlers.rs
+@@ -10,7 +10,7 @@ pub async fn get_user(Path(id): Path<UserId>, State(db): State<Db>) -> impl Into
+-    let user = db.get_user(id).await.context("loading user")?;
+-    Ok(Json(user))
++    let user = db.get_user(id).await.unwrap();
++    Json(user)
+ }

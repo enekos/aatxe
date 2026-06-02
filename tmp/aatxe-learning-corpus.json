@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "repo": "x/y",
+  "updatedAt": "2026-06-02T06:39:40.22547Z",
+  "entries": [
+    {
+      "id": "ec1b461752d4b94e9",
+      "guidance": "Council finding `SSRF in fetch helper` in `src/fetch.rs` was reinforced by 4 positive reaction(s) on PR #7.",
+      "fileGlob": "src/**",
+      "category": "security",
+      "strongestKind": "confirmed",
+      "sourcePr": 7,
+      "sourceCommentId": 9000,
+      "confirmations": 4,
+      "refutations": 0,
+      "firstSeen": "2026-06-02T06:39:40.22547Z",
+      "lastSeen": "2026-06-02T06:39:40.22547Z",
+      "score": 6.0
+    },
+    {
+      "id": "e93f0fd67ac50ebae",
+      "guidance": "always validate URL host before any outbound fetch",
+      "strongestKind": "user-directive",
+      "sourcePr": 7,
+      "sourceCommentId": 9001,
+      "confirmations": 1,
+      "refutations": 0,
+      "firstSeen": "2026-06-01T11:00:00Z",
+      "lastSeen": "2026-06-01T11:00:00Z",
+      "score": 5.943484336106167
+    },
+    {
+      "id": "ea6da1f650aaf5d0e",
+      "guidance": "On `src/fetch.rs`, the council finding `SSRF in fetch helper` was confirmed by a human reviewer on PR #7.",
+      "fileGlob": "src/**",
+      "category": "security",
+      "strongestKind": "confirmed",
+      "sourcePr": 7,
+      "sourceCommentId": 9002,
+      "confirmations": 1,
+      "refutations": 0,
+      "firstSeen": "2026-06-01T11:15:00Z",
+      "lastSeen": "2026-06-01T11:15:00Z",
+      "score": 2.9720998032352988
+    }
+  ]
+}

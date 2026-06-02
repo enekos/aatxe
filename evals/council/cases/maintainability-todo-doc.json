@@ -1,0 +1,16 @@
+{
+  "name": "maintainability-todo-doc",
+  "description": "Ships a doc file whose body is `TODO: write this.` while the README links to it. Low-severity but worth flagging.",
+  "diff": "maintainability-todo-doc.diff",
+  "expected": [
+    {
+      "file": "docs/architecture.md",
+      "lineRange": [1, 5],
+      "severity": "nit",
+      "category": "maintainability",
+      "description": "doc body is a TODO placeholder; ships dead content",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": []
+}

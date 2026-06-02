@@ -1,0 +1,47 @@
+{
+  "name": "security-authz-idor-export-route",
+  "description": "Express admin route adds a /users/:id/export endpoint that calls only `requireAuth`. The file's existing /audit-log route models the correct pattern (`requireAuth` + `requireScope('admin:override')`). The repo also ships src/middleware/authz.ts (presented as related context) which documents that 'every route that reads or writes a user-owned resource MUST go through requireOwner' and explicitly attributes two prior IDOR incidents to this kind of omission. The new route violates the convention twice over (no ownership check, no scope check) and additionally leaks `password_hash` and `two_factor_secret` in the response.",
+  "diff": "security-authz-idor-export-route.diff",
+  "filesDir": "files/security-authz-idor-export-route",
+  "expected": [
+    {
+      "file": "src/routes/admin.ts",
+      "lineRange": [23, 36],
+      "severity": "critical",
+      "category": "security",
+      "description": "Classic IDOR: GET /users/:id/export only checks `requireAuth`, never that the requesting user owns the resource. Any authenticated user can fetch any other user's export — including their password hash and 2FA secret. The repo's authz convention (visible in src/middleware/authz.ts) mandates `requireOwner('users')` for every per-user route.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/routes/admin.ts",
+      "lineRange": [25, 25],
+      "severity": "critical",
+      "category": "security",
+      "description": "The user SELECT pulls `password_hash` and `two_factor_secret` from the DB and ships them in the JSON response. Even if authz were correct, these columns must never leave the auth subsystem — credential exfiltration risk.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/routes/admin.ts",
+      "lineRange": [23, 23],
+      "severity": "major",
+      "category": "security",
+      "description": "Project-wide convention violation: src/middleware/authz.ts exposes `requireOwner(resource, paramName)` precisely to centralise ownership checks, and its top-doc comment cites two prior IDOR incidents as the reason. The new route reinvents nothing — it just skips the check. Visible only with related-file context.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/routes/admin.ts",
+      "lineRange": [23, 23],
+      "severity": "major",
+      "category": "security",
+      "description": "The neighbouring /audit-log route in the SAME file at lines 8–21 uses `requireAuth + requireScope('admin:override')`. The new export route, which exposes equally sensitive data, drops the scope check entirely — inconsistent within a single file.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [
+    {
+      "path": "src/middleware/authz.ts",
+      "reason": "Related-context file (not in the diff). Any finding on it indicates the council reviewed the wrong surface."
+    }
+  ],
+  "maxFindings": 10
+}

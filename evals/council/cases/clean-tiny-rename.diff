@@ -1,0 +1,19 @@
+diff --git a/src/util/formatting.rs b/src/util/formatting.rs
+index 1010101..2020202 100644
+--- a/src/util/formatting.rs
++++ b/src/util/formatting.rs
+@@ -4,6 +4,6 @@ use std::fmt::Write;
+-pub fn format_kebab(s: &str) -> String {
+-    s.to_ascii_lowercase().replace(' ', "-")
++pub fn to_kebab_case(s: &str) -> String {
++    s.to_ascii_lowercase().replace(' ', "-")
+ }
+diff --git a/src/util/mod.rs b/src/util/mod.rs
+index 3030303..4040404 100644
+--- a/src/util/mod.rs
++++ b/src/util/mod.rs
+@@ -1,3 +1,3 @@
+ pub mod formatting;
+
+-pub use formatting::format_kebab;
++pub use formatting::to_kebab_case;

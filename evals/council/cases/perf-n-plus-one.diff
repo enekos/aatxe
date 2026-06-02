@@ -1,0 +1,16 @@
+diff --git a/src/users/loader.rs b/src/users/loader.rs
+index bbbbbbb..ccccccc 100644
+--- a/src/users/loader.rs
++++ b/src/users/loader.rs
+@@ -5,8 +5,14 @@ pub async fn load_users(db: &Db, ids: &[UserId]) -> Result<Vec<User>> {
+-    let users = db.query_users_in(ids).await?;
+-    Ok(users)
++    let mut out = Vec::with_capacity(ids.len());
++    for id in ids {
++        let u = db
++            .query("SELECT * FROM users WHERE id = $1", &[id])
++            .await?;
++        out.push(u);
++    }
++    Ok(out)
+ }

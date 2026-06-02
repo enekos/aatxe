@@ -1,0 +1,16 @@
+{
+  "name": "correctness-unwrap-in-handler",
+  "description": "Replaces a Result-returning handler with .unwrap() on the DB call. A DB error now crashes the worker.",
+  "diff": "correctness-unwrap-in-handler.diff",
+  "expected": [
+    {
+      "file": "src/api/handlers.rs",
+      "lineRange": [10, 14],
+      "severity": "major",
+      "category": "correctness",
+      "description": ".unwrap() on a DB call inside an HTTP handler — DB hiccup → worker panic",
+      "mustCatch": true
+    }
+  ],
+  "forbidden": []
+}

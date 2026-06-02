@@ -1,0 +1,16 @@
+[package]
+name = "aatxe-council"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure orchestration for the aatxe agent council: a single-layer mixture-of-agents PR reviewer with a dedicated judge"
+
+[dependencies]
+aatxe-core = { path = "../aatxe-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }

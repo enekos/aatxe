@@ -1,0 +1,47 @@
+{
+  "name": "maintainability-rust-reinvents-counters",
+  "description": "Rust/axum upload handler grows a per-user bytes counter using a hand-rolled `Arc<Mutex<HashMap<String, u64>>>` on the request hot path. The repo's existing `Counters` type (src/metrics/mod.rs, presented as related context) is the canonical per-key metric — DashMap + per-key AtomicU64, lock-free reads/writes — and its module doc explicitly cites a 2025-09 upload-deadlock incident as the reason new `Mutex<HashMap>` counters are discouraged. The new code reinvents what already exists, serialises every upload through a single global mutex, AND uses `.lock().unwrap()` which deadlocks every handler on first panic.",
+  "diff": "maintainability-rust-reinvents-counters.diff",
+  "filesDir": "files/maintainability-rust-reinvents-counters",
+  "expected": [
+    {
+      "file": "src/handlers/upload.rs",
+      "lineRange": [6, 21],
+      "severity": "major",
+      "category": "maintainability",
+      "description": "Reinvents the existing `Counters` type from src/metrics/mod.rs (visible in related context). The repo's module-level doc on Counters mandates its use 'for ALL per-key numeric metrics' and explicitly discourages the `Mutex<HashMap>`-counter pattern the diff introduces, citing a 2025-09 incident. Should be `Counters::inc(\"upload.user.<id>.bytes\", n)` (or a small typed wrapper around it).",
+      "mustCatch": true
+    },
+    {
+      "file": "src/handlers/upload.rs",
+      "lineRange": [12, 16],
+      "severity": "major",
+      "category": "performance",
+      "description": "`Arc<Mutex<HashMap>>` serialises every single upload through a global mutex — under concurrent load the upload handler becomes the bottleneck. The existing Counters API uses DashMap+AtomicU64 which is sharded and lock-free on the hot path. Visible from the diff alone (the type signature is right there); the project-wide-context piece is *which* alternative to recommend.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/handlers/upload.rs",
+      "lineRange": [13, 19],
+      "severity": "major",
+      "category": "correctness",
+      "description": "`.lock().unwrap()` panics on a poisoned mutex. The first time ANY task panics while holding `per_user_bytes`, every subsequent upload panics during `record`/`snapshot`, taking the whole upload subsystem down (axum aborts the worker but the shared Arc keeps the poison). Should use `try_lock`, recover via `lock().unwrap_or_else(|e| e.into_inner())`, or — preferably — switch to the lock-free Counters API.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/handlers/upload.rs",
+      "lineRange": [36, 36],
+      "severity": "minor",
+      "category": "correctness",
+      "description": "`let user_id = \"anonymous\";` hardcodes a single key for every request — the new 'per-user' stats are actually global. Either thread the real user id through from the request extractor or drop the per-user pretense.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [
+    {
+      "path": "src/metrics/mod.rs",
+      "reason": "Related-context file (not in the diff). Any finding on it indicates the council reviewed the wrong surface."
+    }
+  ],
+  "maxFindings": 10
+}

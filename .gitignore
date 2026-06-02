@@ -1,0 +1,31 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Per-language SDK artifacts
+sdk/ts/node_modules
+sdk/ts/dist
+sdk/ts/*.tsbuildinfo
+sdk/go/.aatxe-cache
+
+# Example artifacts
+examples/**/node_modules
+examples/**/target
+examples/**/dist
+examples/**/*.tsbuildinfo
+
+# Editor + OS
+.DS_Store
+.idea
+.vscode
+*.swp
+
+# Aatxe output
+**/aatxe.json
+**/aatxe-report.json
+**/aatxe-report.md
+
+# Secrets
+.env
+.env.local
+.secrets

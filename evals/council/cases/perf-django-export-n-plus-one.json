@@ -1,0 +1,58 @@
+{
+  "name": "perf-django-export-n-plus-one",
+  "description": "Django view that exports active users while charging a per-user fee via a third-party billing API. The diff touches a single file (app/views/exports.py) but the harness also ships app/utils/db.py and app/utils/billing.py as related repository context — both expose the canonical helpers the diff should have used. Five bugs in one hot path: classic N+1 (User.objects.get inside the loop), len(list(qs)) materialising the queryset just to test non-emptiness, unbatched per-iteration billing calls, plus two project-wide-context findings only catchable when the model sees the helper modules — should-have-used prefetch_in_batches (or exists_fast) from app/utils/db.py and BillingClient.batch_charge from app/utils/billing.py.",
+  "diff": "perf-django-export-n-plus-one.diff",
+  "filesDir": "files/perf-django-export-n-plus-one",
+  "expected": [
+    {
+      "file": "app/views/exports.py",
+      "lineRange": [27, 34],
+      "severity": "major",
+      "category": "performance",
+      "description": "Classic N+1: the loop body calls `User.objects.get(id=uid)` once per id and then `o.id for o in u.orders.all()` once per user — for an N-id request that's N user queries + N orders queries. The filter on line 21 already loaded the users; the loop should iterate `qs` (with prefetch_related('orders')) instead of re-fetching.",
+      "mustCatch": true
+    },
+    {
+      "file": "app/views/exports.py",
+      "lineRange": [22, 22],
+      "severity": "minor",
+      "category": "performance",
+      "description": "`len(list(qs)) == 0` materialises the entire queryset into Python just to check emptiness. Should be `not qs.exists()` (single `SELECT 1 ... LIMIT 1`). The repo already exposes `exists_fast(qs)` in app/utils/db.py for exactly this pattern.",
+      "mustCatch": true
+    },
+    {
+      "file": "app/views/exports.py",
+      "lineRange": [27, 29],
+      "severity": "major",
+      "category": "correctness",
+      "description": "`billing.charge(u.id, ...)` is called once per id with no batching, no rate-limiting and no try/except. A request with 1000 ids fires 1000 sequential charges; one transient billing-API error mid-loop leaves the export half-charged with no record of who succeeded.",
+      "mustCatch": true
+    },
+    {
+      "file": "app/views/exports.py",
+      "lineRange": [27, 27],
+      "severity": "major",
+      "category": "performance",
+      "description": "Project-wide convention violation: app/utils/db.py exposes `prefetch_in_batches(qs, batch_size=500)` as the canonical iterator helper. The loop here re-fetches each user individually instead of iterating the queryset via that helper — visible only with related-file context.",
+      "mustCatch": true
+    },
+    {
+      "file": "app/views/exports.py",
+      "lineRange": [29, 29],
+      "severity": "major",
+      "category": "performance",
+      "description": "Project-wide convention violation: app/utils/billing.py documents `BillingClient.batch_charge(charges)` and explicitly states 'always prefer batch_charge for any bulk operation'. The loop ignores it and falls back to the single-id `charge` method, which the helper's docstring says costs 10× more and trips the 10 req/s rate-limit. Visible only with related-file context.",
+      "mustCatch": true
+    },
+    {
+      "file": "app/views/exports.py",
+      "lineRange": [20, 21],
+      "severity": "minor",
+      "category": "security",
+      "description": "`json.loads(request.body).get('ids', [])` accepts unbounded id lists. With no length cap an attacker (or a buggy client) can post a million ids and the endpoint will happily try to charge each one. Should clamp before the DB query.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 10
+}

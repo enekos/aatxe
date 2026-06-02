@@ -1,0 +1,90 @@
+# Self-test workflow for the aatxe agent council.
+#
+# Unlike the reusable workflow (aatxe-council.yml), this one builds the
+# aatxe CLI from the *checked-out workspace* — it's designed to be run on
+# aatxe's own PRs and inside `act` for local CI verification, before the
+# repo has any published release artefacts.
+#
+# Default mode: stub LLM (env AATXE_COUNCIL_STUB=1). The stub produces
+# deterministic canned findings against the bundled fixture diff so the
+# whole pipeline (workspace build → CLI run → sticky-marker rendering →
+# exit-code gate) is exercised without burning Moonshot quota.
+#
+# To exercise the real Kimi integration, pass `KIMI_API_KEY` as a secret;
+# the workflow auto-flips off stub mode when the key is present.
+
+name: aatxe-council-selftest
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      use-real-kimi:
+        description: "Set to 'true' to call the real Kimi API (otherwise the stub LLM is used)"
+        required: false
+        default: 'false'
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build aatxe CLI from workspace
+        run: cargo build --release -p aatxe
+
+      - name: Decide stub vs. real Kimi
+        id: mode
+        env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          USE_REAL: ${{ github.event.inputs.use-real-kimi }}
+        run: |
+          if [ "$USE_REAL" = "true" ] && [ -n "$KIMI_API_KEY" ]; then
+            echo "stub=0" >> "$GITHUB_OUTPUT"
+            echo "    → using real Kimi (KIMI_API_KEY present, use-real-kimi=true)"
+          else
+            echo "stub=1" >> "$GITHUB_OUTPUT"
+            if [ "$USE_REAL" = "true" ]; then
+              echo "    → use-real-kimi=true but KIMI_API_KEY is empty; falling back to stub"
+            else
+              echo "    → using stub LLM (no Moonshot calls)"
+            fi
+          fi
+
+      - name: Run council against the bundled fixture diff
+        env:
+          AATXE_COUNCIL_STUB: ${{ steps.mode.outputs.stub }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          KIMI_BASE_URL: ${{ secrets.KIMI_BASE_URL }}
+          KIMI_MODEL: ${{ secrets.KIMI_MODEL }}
+        run: |
+          ./target/release/aatxe council \
+            --diff-file examples/council-bench/fixtures/sample.diff \
+            --confidence-floor 0.55 \
+            --markdown /tmp/council-selftest.md \
+            --out /tmp/council-selftest.json
+
+      - name: Assert sticky marker + JSON shape
+        run: |
+          grep -q '<!-- aatxe:council -->' /tmp/council-selftest.md \
+            || { echo "✗ sticky marker missing"; exit 1; }
+          jq -e '.proposerReviews | length == 4' /tmp/council-selftest.json >/dev/null \
+            || { echo "✗ proposer count != 4"; exit 1; }
+          jq -e '.filesReviewed >= 4' /tmp/council-selftest.json >/dev/null \
+            || { echo "✗ filesReviewed too low"; exit 1; }
+          echo "✓ council selftest produced a well-formed sticky body"
+
+      - name: Print rendered body (first 120 lines)
+        run: head -120 /tmp/council-selftest.md

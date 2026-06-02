@@ -1,0 +1,23 @@
+diff --git a/src/routes/admin.ts b/src/routes/admin.ts
+index 7777777..8888888 100644
+--- a/src/routes/admin.ts
++++ b/src/routes/admin.ts
+@@ -19,3 +19,18 @@
+     return res.json({ entries });
+   },
+ );
++
++adminRouter.get("/users/:id/export", requireAuth, async (req, res) => {
++  const user = await db.query(
++    `SELECT id, email, password_hash, created_at, two_factor_secret
++       FROM users
++      WHERE id = $1`,
++    [req.params.id],
++  );
++  if (!user) return res.status(404).json({ error: "not found" });
++  const orders = await db.query(
++    `SELECT id, total_cents, created_at FROM orders WHERE user_id = $1`,
++    [req.params.id],
++  );
++  return res.json({ user, orders });
++});

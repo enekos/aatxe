@@ -1,0 +1,12 @@
+{
+  "name": "forbidden-generated-code",
+  "description": "PR touches only generated code (*.pb.go, web/dist/bundle.js, Cargo.lock). Council pre-filter should drop everything; expected output is zero shippable findings.",
+  "diff": "forbidden-generated-code.diff",
+  "expected": [],
+  "forbidden": [
+    {"path": "services/auth.pb.go", "reason": "protoc-generated"},
+    {"path": "web/dist/bundle.js", "reason": "build artefact"},
+    {"path": "Cargo.lock", "reason": "lockfile"}
+  ],
+  "maxFindings": 0
+}

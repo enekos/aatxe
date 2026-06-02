@@ -1,0 +1,12 @@
+[package]
+name = "aatxe-example-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "aatxe-rust-runner"
+path = "src/main.rs"
+
+[dependencies]
+aatxe-bench = { path = "../../sdk/rust" }

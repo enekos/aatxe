@@ -1,0 +1,40 @@
+use crate::metrics::Counters;
+use axum::{body::Bytes, extract::State, http::StatusCode};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Default)]
+pub struct UploadStats {
+    pub per_user_bytes: Arc<Mutex<HashMap<String, u64>>>,
+}
+
+impl UploadStats {
+    pub fn record(&self, user_id: &str, n: u64) {
+        let mut g = self.per_user_bytes.lock().unwrap();
+        let entry = g.entry(user_id.to_string()).or_insert(0);
+        *entry += n;
+    }
+
+    pub fn snapshot(&self, user_id: &str) -> u64 {
+        *self.per_user_bytes.lock().unwrap().get(user_id).unwrap_or(&0)
+    }
+}
+
+#[derive(Clone)]
+pub struct UploadState {
+    pub counters: Counters,
+    pub stats: UploadStats,
+}
+
+pub async fn upload(
+    State(state): State<UploadState>,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    state.counters.inc("upload.requests", 1);
+    state.counters.inc("upload.bytes", body.len() as u64);
+    // Per-user totals for the new quota dashboard.
+    let user_id = "anonymous";
+    state.stats.record(user_id, body.len() as u64);
+    let _seen = state.stats.snapshot(user_id);
+    Ok(StatusCode::CREATED)
+}
