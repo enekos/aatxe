@@ -71,25 +71,18 @@ async function runOne(b: RegisteredBench): Promise<BenchRun> {
   const setup = o.setup
   const teardown = o.teardown
 
-  // Decide once whether this bench can run on the sync hot loop. Wrapping a
-  // sync fn in `async () => { … }` adds ~100-500ns per invocation from the
+  // Decide whether this bench can run on the sync hot loop. Wrapping a sync
+  // fn in `async () => { … }` adds ~100-500ns per invocation from the
   // synthetic Promise + microtask hop, which swamps real sub-µs benches.
+  //
+  // We rely on the syntactic `async` keyword to detect async benches —
+  // setup/teardown also force the async path. A previous version probed by
+  // calling the bench once and inspecting the return type, but that ran the
+  // bench's side effects outside the timing window (silently invalidating
+  // I/O benches whose first call mutates state). If your bench returns a
+  // Promise without being declared `async`, wrap it: `async () => fn()`.
   const declaredAsync = (fn as { constructor?: { name?: string } }).constructor?.name === 'AsyncFunction'
-  let probeAsync = false
-  if (!setup && !teardown && !declaredAsync) {
-    try {
-      const probe = fn(undefined)
-      if (probe instanceof Promise) {
-        probeAsync = true
-        await probe
-      }
-    } catch {
-      // Probe failures fall through to the async path so the error surfaces
-      // with the same try/finally semantics as a normal iteration.
-      probeAsync = true
-    }
-  }
-  const isAsync = declaredAsync || probeAsync || setup !== null || teardown !== null
+  const isAsync = declaredAsync || setup !== null || teardown !== null
 
   if (!isAsync) {
     return runSync(b, fn, o)
