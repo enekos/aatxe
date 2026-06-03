@@ -94,6 +94,16 @@ pub struct FileGraph {
     /// Verbatim import-target strings as written in the source
     /// (`"./util"`, `"crate::foo"`, `"github.com/x/y"`).
     pub imports: Vec<String>,
+    /// File-edge specifiers — the subset of imports + module declarations
+    /// that map to *file paths* in the same source tree, in the shape
+    /// expected by `aatxe-core::affected::resolve_import` (relative
+    /// specifiers like `./util`, `./alt/d.rs`). Distinct from `imports`:
+    /// `imports` is what the prompt block prints; `file_edges` is what
+    /// the affected-set resolver walks. For Rust, this includes
+    /// `mod foo;` declarations (synthesised as `./foo`), `#[path]`
+    /// attribute overrides, and `include!("…")` macro invocations —
+    /// none of which appear in `imports`.
+    pub file_edges: Vec<String>,
     pub symbol_descriptions: HashMap<String, String>,
 }
 

@@ -103,6 +103,90 @@ impl GitRunner for FixedGit {
     }
 }
 
+// --- import extractor seam ---
+
+#[test]
+fn custom_import_extractor_is_consulted_instead_of_regex() {
+    // The new `ImportExtractor` seam (introduced by #7a so the CLI can
+    // swap in an AST-backed extractor) must completely replace the
+    // regex pass when the caller supplies one. Verify it both ways:
+    //   1. a custom extractor returning an empty Vec ⇒ no edges
+    //      followed, so foo.bench.ts is NOT affected even though it
+    //      imports foo.ts (which IS changed);
+    //   2. an extractor that returns the right specifier ⇒ edge walked,
+    //      foo.bench.ts becomes affected.
+    use aatxe_core::affected::ImportExtractor;
+    use aatxe_core::types::Language;
+
+    struct Empty;
+    impl ImportExtractor for Empty {
+        fn extract(&self, _src: &str, _lang: Language) -> Vec<String> {
+            vec![]
+        }
+    }
+    struct Hardcoded(Vec<String>);
+    impl ImportExtractor for Hardcoded {
+        fn extract(&self, _src: &str, _lang: Language) -> Vec<String> {
+            self.0.clone()
+        }
+    }
+
+    let fs = MemFs::default()
+        .file("/r/svc/sub/foo.ts", "export const x = 1")
+        .file(
+            "/r/svc/sub/foo.bench.ts",
+            "import { x } from './foo'\nconst _ = x",
+        );
+    let git = FixedGit {
+        root: PathBuf::from("/r"),
+        changed: vec!["svc/sub/foo.ts".into()],
+        calls: RefCell::new(vec![]),
+    };
+
+    // Case 1: empty extractor — no edges, bench not affected.
+    let empty = Empty;
+    let set = resolve_affected(&AffectedOptions {
+        cwd: PathBuf::from("/r/svc"),
+        base: "origin/master".into(),
+        language: Language::Ts,
+        patterns: vec![],
+        extra_changed_files: vec![],
+        git: &git,
+        fs: &fs,
+        import_extractor: Some(&empty),
+    })
+    .unwrap();
+    assert!(
+        set.bench_files.is_empty(),
+        "empty extractor must short-circuit the affected walk; got {:?}",
+        set.bench_files
+    );
+
+    // Case 2: hardcoded ./foo specifier — edge resolved, bench affected.
+    let hardcoded = Hardcoded(vec!["./foo".to_string()]);
+    let set = resolve_affected(&AffectedOptions {
+        cwd: PathBuf::from("/r/svc"),
+        base: "origin/master".into(),
+        language: Language::Ts,
+        patterns: vec![],
+        extra_changed_files: vec![],
+        git: &FixedGit {
+            root: PathBuf::from("/r"),
+            changed: vec!["svc/sub/foo.ts".into()],
+            calls: RefCell::new(vec![]),
+        },
+        fs: &fs,
+        import_extractor: Some(&hardcoded),
+    })
+    .unwrap();
+    let names: Vec<&str> = set
+        .bench_files
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["foo.bench.ts"]);
+}
+
 // --- ts ---
 
 #[test]
@@ -171,6 +255,7 @@ fn ts_affected_intersects_diff_with_reachable_set() {
         extra_changed_files: vec![],
         git: &git,
         fs: &fs,
+        import_extractor: None,
     })
     .unwrap();
     let names: Vec<&str> = set
@@ -234,6 +319,7 @@ fn go_affected_with_explicit_changed_files() {
         extra_changed_files: vec!["svc/shared/shared.go".into()],
         git: &git,
         fs: &fs,
+        import_extractor: None,
     })
     .unwrap();
     assert_eq!(set.bench_files.len(), 1);
@@ -341,6 +427,7 @@ fn extra_changed_files_force_affected_status() {
         extra_changed_files: vec!["svc/a.bench.ts".into()],
         git: &git,
         fs: &fs,
+        import_extractor: None,
     })
     .unwrap();
     assert_eq!(set.bench_files.len(), 1);
@@ -363,6 +450,7 @@ fn resolve_affected_empty_when_no_diff() {
         extra_changed_files: vec![],
         git: &git,
         fs: &fs,
+        import_extractor: None,
     })
     .unwrap();
     assert_eq!(set.bench_files.len(), 0, "no diff ⇒ no affected benches");
@@ -395,6 +483,7 @@ fn discovery_excludes_node_modules_and_target() {
         extra_changed_files: vec![],
         git: &git,
         fs: &fs,
+        import_extractor: None,
     })
     .unwrap();
     assert_eq!(set.all_bench_files.len(), 1, "only real.bench.ts visible");

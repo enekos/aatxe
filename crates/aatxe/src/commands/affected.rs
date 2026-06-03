@@ -1,6 +1,7 @@
 //! `aatxe affected` — print the affected bench files for a given diff base.
 
 use crate::adapter::real_fs::{RealFs, RealGit};
+use crate::ast_import_extractor::AstImportExtractor;
 use crate::cli::AffectedArgs;
 use aatxe_core::affected::{resolve_affected, AffectedOptions};
 use anyhow::Result;
@@ -11,6 +12,7 @@ pub fn execute(args: AffectedArgs) -> Result<()> {
     let cwd = args.cwd.unwrap_or_else(|| std::env::current_dir().unwrap());
     let fs = RealFs;
     let git = RealGit;
+    let extractor = AstImportExtractor;
     let set = resolve_affected(&AffectedOptions {
         cwd: cwd.clone(),
         base: args.base.clone(),
@@ -19,6 +21,7 @@ pub fn execute(args: AffectedArgs) -> Result<()> {
         extra_changed_files: vec![],
         git: &git,
         fs: &fs,
+        import_extractor: Some(&extractor),
     })?;
     let affected_set: HashSet<PathBuf> = set.bench_files.iter().cloned().collect();
     if args.show_all {
