@@ -45,12 +45,12 @@ fn main() {
     // --- 3. Chunking -----------------------------------------------------
     let kept = filter_ignored(files.clone(), DEFAULT_IGNORED_PATTERNS).0;
     bench(&mut suite, "diff::chunk_for_review", || {
-        let chunks = chunk_for_review(std::hint::black_box(&kept), ChunkPolicy::default());
+        let chunks = chunk_for_review(std::hint::black_box(&kept), &[], ChunkPolicy::default());
         std::hint::black_box(chunks);
     });
 
     // --- 4. Prompt assembly (proposer) -----------------------------------
-    let chunks = chunk_for_review(&kept, ChunkPolicy::default());
+    let chunks = chunk_for_review(&kept, &[], ChunkPolicy::default());
     let one_chunk = chunks
         .first()
         .cloned()

@@ -15,6 +15,7 @@ mod gh_diff;
 mod github_http;
 mod pi_proxy;
 mod stub_client;
+mod subprocess_llm;
 
 use std::process::ExitCode;
 

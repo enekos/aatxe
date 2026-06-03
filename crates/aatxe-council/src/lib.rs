@@ -53,8 +53,8 @@ pub mod synth;
 pub mod types;
 
 pub use diff::{
-    attach_file_contexts, chunk_for_review_with_related, filter_ignored, parse_unified_diff,
-    ChunkPolicy, DiffChunk, ParsedFile, RelatedFile,
+    attach_file_contexts, chunk_for_review, chunk_for_review_owned, filter_ignored,
+    parse_unified_diff, ChunkPolicy, DiffChunk, ParsedFile, RelatedFile,
 };
 pub use events::{CouncilEvent, EventSink, NullSink};
 pub use llm::{ChatMessage, ChatRequest, ChatResponse, LlmClient, LlmError, Role};

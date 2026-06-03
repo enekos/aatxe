@@ -47,12 +47,14 @@
 //! pipeline already parallelises proposers across personas, so wall-clock
 //! is roughly the slowest single agent call rather than 4×.
 
+use crate::subprocess_llm::{
+    join_with_blank_lines, partition_messages, sanitize_text_output, spawn_and_wait,
+};
 use aatxe_core::secret::Secret;
-use aatxe_council::llm::{ChatRequest, ChatResponse, LlmClient, LlmError, Role};
+use aatxe_council::llm::{ChatRequest, ChatResponse, LlmClient, LlmError};
 use std::env;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// Where to find the `pi` binary, which model to drive it with, and how
@@ -132,15 +134,6 @@ impl PiAgentClient {
         Self { config, api_key }
     }
 
-    /// Builder-style override of the underlying API key. Used by the test
-    /// suite (which doesn't want the real key in scope) and by future
-    /// callers that source credentials from somewhere other than `env`.
-    #[allow(dead_code)]
-    pub fn with_api_key(mut self, key: Option<Secret>) -> Self {
-        self.api_key = key;
-        self
-    }
-
     /// Build the `pi` argv for a single call. Public for tests so we can
     /// assert the spawn shape without actually running `pi`.
     pub(crate) fn build_command(&self, system_prompt: &str) -> Command {
@@ -178,72 +171,15 @@ impl LlmClient for PiAgentClient {
     fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError> {
         let t0 = Instant::now();
 
-        // Compose the system prompt from every `Role::System` message,
-        // and the user message from the remaining non-system roles. `pi`
-        // takes a single `--system-prompt` string and reads the user
-        // payload from stdin; assistant turns (which the council never
-        // sends today) would be inlined into the user blob.
-        let (system_parts, user_parts): (Vec<&String>, Vec<&String>) =
-            req.messages.iter().partition_map(|m| match m.role {
-                Role::System => either::Either::Left(&m.content),
-                _ => either::Either::Right(&m.content),
-            });
-        let system_prompt = system_parts.iter().fold(String::new(), |mut acc, s| {
-            if !acc.is_empty() {
-                acc.push_str("\n\n");
-            }
-            acc.push_str(s);
-            acc
-        });
-        let user_blob = user_parts.iter().fold(String::new(), |mut acc, s| {
-            if !acc.is_empty() {
-                acc.push_str("\n\n");
-            }
-            acc.push_str(s);
-            acc
-        });
+        // `pi` takes a single `--system-prompt` flag and reads the user
+        // payload from stdin; concatenate each role's content with
+        // blank-line separators so the model sees one continuous block.
+        let (system_parts, user_parts) = partition_messages(&req.messages);
+        let system_prompt = join_with_blank_lines(&system_parts);
+        let user_blob = join_with_blank_lines(&user_parts);
 
-        let mut cmd = self.build_command(&system_prompt);
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| LlmError::Transport(format!("spawning {:?}: {e}", self.config.binary)))?;
-
-        // Stream the user message in. Drop the handle so `pi` sees EOF.
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(user_blob.as_bytes())
-                .map_err(|e| LlmError::Transport(format!("writing stdin to pi: {e}")))?;
-        }
-
-        // Bounded wait. `child.wait_with_output()` doesn't take a timeout
-        // on stable Rust, so we poll `try_wait` and `kill` on overrun.
-        let deadline = t0 + self.config.timeout;
-        let output = loop {
-            match child.try_wait() {
-                Ok(Some(_status)) => {
-                    // Process exited — drain stdout/stderr.
-                    break child
-                        .wait_with_output()
-                        .map_err(|e| LlmError::Transport(format!("collecting pi output: {e}")))?;
-                }
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(LlmError::Transport(format!(
-                            "pi did not exit within {} seconds",
-                            self.config.timeout.as_secs()
-                        )));
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => return Err(LlmError::Transport(format!("waiting on pi: {e}"))),
-            }
-        };
+        let cmd = self.build_command(&system_prompt);
+        let output = spawn_and_wait(cmd, &user_blob, self.config.timeout, t0, "pi")?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -274,64 +210,6 @@ impl LlmClient for PiAgentClient {
     }
 }
 
-/// Some pi providers (notably the Claude-family ones via `pi --mode text`)
-/// occasionally wrap JSON answers in a markdown ```json fence even after
-/// being told not to. The proposer/judge parsers already tolerate prose
-/// around the JSON object, but stripping a single matching fence here is
-/// cheap insurance and keeps every other backend's behaviour identical.
-///
-/// We *also* trim trailing/leading whitespace so the parser sees a clean
-/// `{` … `}` boundary.
-fn sanitize_text_output(raw: &str) -> String {
-    let trimmed = raw.trim();
-    // Strip a leading ```<lang> fence and the matching ``` if present.
-    if let Some(rest) = trimmed.strip_prefix("```") {
-        // Drop the first line (the fence + optional language tag).
-        if let Some(nl) = rest.find('\n') {
-            let body = &rest[nl + 1..];
-            if let Some(stripped) = body.strip_suffix("```") {
-                return stripped.trim().to_string();
-            }
-            // Fence opened but didn't close → fall through to raw return.
-        }
-    }
-    trimmed.to_string()
-}
-
-// ---------------------------------------------------------------------------
-// `itertools::Itertools::partition_map` brings in a 50KB dep for one call.
-// Roll a tiny local equivalent on the std iterator instead.
-mod either {
-    pub enum Either<L, R> {
-        Left(L),
-        Right(R),
-    }
-}
-
-trait PartitionMap<T> {
-    fn partition_map<L, R, F>(self, f: F) -> (Vec<L>, Vec<R>)
-    where
-        Self: Sized,
-        F: FnMut(T) -> either::Either<L, R>;
-}
-
-impl<I: Iterator<Item = T>, T> PartitionMap<T> for I {
-    fn partition_map<L, R, F>(self, mut f: F) -> (Vec<L>, Vec<R>)
-    where
-        F: FnMut(T) -> either::Either<L, R>,
-    {
-        let mut left = Vec::new();
-        let mut right = Vec::new();
-        for item in self {
-            match f(item) {
-                either::Either::Left(l) => left.push(l),
-                either::Either::Right(r) => right.push(r),
-            }
-        }
-        (left, right)
-    }
-}
-
 // Tests build only on Unix: they install a `#!/bin/sh` shell script as a
 // fake-pi binary and chmod it via `std::os::unix::fs::PermissionsExt`.
 // The production code in this module is portable; only the test harness
@@ -340,54 +218,12 @@ impl<I: Iterator<Item = T>, T> PartitionMap<T> for I {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::subprocess_llm::test_fixture::{fake_binary, fake_sleeping_binary};
     use aatxe_council::llm::ChatMessage;
     use std::fs;
 
-    /// Compose a tiny shell-script binary that mimics enough of `pi`'s
-    /// surface for unit tests. The script:
-    ///   * echoes a canned response (passed as $1) to stdout
-    ///   * exits with the given status (passed as $2)
-    ///   * writes the invocation argv + stdin to a sidecar file so the
-    ///     test can assert what `PiAgentClient` actually called.
-    ///
-    /// Returns the path of the fake binary + the path of the capture
-    /// file. Caller owns both via the returned `tempfile::TempDir`.
     fn fake_pi(canned_stdout: &str, exit_code: i32) -> (tempfile::TempDir, PathBuf, PathBuf) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let bin = dir.path().join("pi");
-        let capture = dir.path().join("capture.txt");
-        // The script ignores all flags and just echoes what the test
-        // asks. It records `$@` and stdin into the capture file so the
-        // unit tests can assert PiAgentClient passed the right argv.
-        let script = format!(
-            "#!/bin/sh\n\
-             {{ echo \"argv: $@\"; echo '---stdin---'; cat; }} > {cap}\n\
-             printf '%s' {payload}\n\
-             exit {code}\n",
-            cap = shell_escape(capture.to_str().unwrap()),
-            payload = shell_escape(canned_stdout),
-            code = exit_code
-        );
-        fs::write(&bin, script).expect("write fake-pi");
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&bin).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&bin, perms).unwrap();
-        (dir, bin, capture)
-    }
-
-    fn shell_escape(s: &str) -> String {
-        let mut out = String::with_capacity(s.len() + 2);
-        out.push('\'');
-        for c in s.chars() {
-            if c == '\'' {
-                out.push_str("'\\''");
-            } else {
-                out.push(c);
-            }
-        }
-        out.push('\'');
-        out
+        fake_binary("pi", canned_stdout, exit_code)
     }
 
     fn cfg_with(bin: PathBuf) -> PiConfig {
@@ -404,7 +240,7 @@ mod tests {
     #[test]
     fn build_command_passes_council_tool_allowlist_and_no_session() {
         let (_dir, bin, _cap) = fake_pi("{}", 0);
-        let client = PiAgentClient::new(cfg_with(bin)).with_api_key(None);
+        let client = PiAgentClient::new(cfg_with(bin));
         let cmd = client.build_command("SYS");
         // `Command::get_args` returns OsStr; collect to strings for easy
         // assertions.
@@ -433,7 +269,7 @@ mod tests {
     #[test]
     fn chat_routes_system_messages_to_flag_and_user_to_stdin() {
         let (_dir, bin, cap) = fake_pi(r#"{"findings":[]}"#, 0);
-        let client = PiAgentClient::new(cfg_with(bin)).with_api_key(None);
+        let client = PiAgentClient::new(cfg_with(bin));
         let req = ChatRequest {
             model: "ignored".into(),
             messages: vec![
@@ -462,7 +298,7 @@ mod tests {
     #[test]
     fn chat_returns_status_error_on_nonzero_exit() {
         let (_dir, bin, _cap) = fake_pi("boom", 17);
-        let client = PiAgentClient::new(cfg_with(bin)).with_api_key(None);
+        let client = PiAgentClient::new(cfg_with(bin));
         let err = client
             .chat(ChatRequest {
                 model: "ignored".into(),
@@ -486,7 +322,7 @@ mod tests {
     #[test]
     fn chat_returns_empty_error_on_blank_stdout() {
         let (_dir, bin, _cap) = fake_pi("", 0);
-        let client = PiAgentClient::new(cfg_with(bin)).with_api_key(None);
+        let client = PiAgentClient::new(cfg_with(bin));
         let err = client
             .chat(ChatRequest {
                 model: "ignored".into(),
@@ -502,7 +338,7 @@ mod tests {
     #[test]
     fn chat_strips_a_matching_markdown_fence() {
         let (_dir, bin, _cap) = fake_pi("```json\n{\"findings\":[]}\n```", 0);
-        let client = PiAgentClient::new(cfg_with(bin)).with_api_key(None);
+        let client = PiAgentClient::new(cfg_with(bin));
         let resp = client
             .chat(ChatRequest {
                 model: "ignored".into(),
@@ -520,7 +356,7 @@ mod tests {
         // Non-existent binary → Command::spawn fails before any IO.
         let mut cfg = cfg_with(PathBuf::from("/does/not/exist/pi-xyz"));
         cfg.timeout = Duration::from_secs(1);
-        let client = PiAgentClient::new(cfg).with_api_key(None);
+        let client = PiAgentClient::new(cfg);
         let err = client
             .chat(ChatRequest {
                 model: "ignored".into(),
@@ -535,18 +371,10 @@ mod tests {
 
     #[test]
     fn timeout_kills_the_child_and_returns_transport_error() {
-        // A fake-pi that sleeps longer than our timeout.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let bin = dir.path().join("pi");
-        fs::write(&bin, "#!/bin/sh\nsleep 30\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut p = fs::metadata(&bin).unwrap().permissions();
-        p.set_mode(0o755);
-        fs::set_permissions(&bin, p).unwrap();
-
+        let (_dir, bin) = fake_sleeping_binary("pi", 30);
         let mut cfg = cfg_with(bin);
         cfg.timeout = Duration::from_millis(300);
-        let client = PiAgentClient::new(cfg).with_api_key(None);
+        let client = PiAgentClient::new(cfg);
         let t0 = Instant::now();
         let err = client
             .chat(ChatRequest {
@@ -569,34 +397,5 @@ mod tests {
             ),
             other => panic!("expected Transport timeout, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn sanitize_strips_only_fenced_json_blocks() {
-        assert_eq!(sanitize_text_output("plain"), "plain");
-        assert_eq!(sanitize_text_output("   plain   "), "plain");
-        assert_eq!(
-            sanitize_text_output("```json\n{\"a\":1}\n```"),
-            r#"{"a":1}"#
-        );
-        // Unterminated fence — leave as-is (parser downstream will deal).
-        assert_eq!(
-            sanitize_text_output("```json\n{\"a\":1}\n").trim_end(),
-            "```json\n{\"a\":1}"
-        );
-    }
-
-    #[test]
-    fn partition_map_routes_messages_to_left_and_right() {
-        let items = vec!["s1", "u1", "s2", "u2"];
-        let (sys, user): (Vec<&str>, Vec<&str>) = items.into_iter().partition_map(|m| {
-            if m.starts_with('s') {
-                either::Either::Left(m)
-            } else {
-                either::Either::Right(m)
-            }
-        });
-        assert_eq!(sys, vec!["s1", "s2"]);
-        assert_eq!(user, vec!["u1", "u2"]);
     }
 }

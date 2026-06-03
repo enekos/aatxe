@@ -44,12 +44,14 @@
 //! occasionally wraps JSON answers in a markdown fence even when told
 //! not to) plus the usage tokens for cost telemetry.
 
-use aatxe_council::llm::{ChatRequest, ChatResponse, LlmClient, LlmError, Role};
+use crate::subprocess_llm::{
+    join_with_blank_lines, partition_messages, sanitize_text_output, spawn_and_wait,
+};
+use aatxe_council::llm::{ChatRequest, ChatResponse, LlmClient, LlmError};
 use serde::Deserialize;
 use std::env;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// Where to find the `claude` binary, which model to drive it with, and
@@ -193,59 +195,17 @@ impl LlmClient for ClaudeCodeClient {
     fn chat(&self, req: ChatRequest) -> Result<ChatResponse, LlmError> {
         let t0 = Instant::now();
 
-        // Compose the system prompt from every `Role::System` message
-        // (the council passes persona prompt + learned-guidance + AST
-        // scope hints separately; we concatenate them with blank-line
-        // separators so the model sees one continuous system block) and
-        // the user message from the remaining roles. Claude Code takes a
-        // single `--append-system-prompt` flag and reads the user
-        // payload from stdin.
-        let (system_parts, user_parts): (Vec<&String>, Vec<&String>) =
-            partition_messages(&req.messages);
+        // Claude Code takes a single `--append-system-prompt` flag and
+        // reads the user payload from stdin. The council passes persona
+        // prompt + learned guidance + AST scope hints as separate
+        // system messages; we concatenate them blank-line-separated so
+        // the model sees one continuous system block.
+        let (system_parts, user_parts) = partition_messages(&req.messages);
         let system_prompt = join_with_blank_lines(&system_parts);
         let user_blob = join_with_blank_lines(&user_parts);
 
-        let mut cmd = self.build_command(&system_prompt);
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| LlmError::Transport(format!("spawning {:?}: {e}", self.config.binary)))?;
-
-        // Stream the user message in. Drop the handle so claude sees EOF.
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(user_blob.as_bytes())
-                .map_err(|e| LlmError::Transport(format!("writing stdin to claude: {e}")))?;
-        }
-
-        // Bounded wait. `child.wait_with_output()` doesn't take a
-        // timeout on stable Rust, so we poll `try_wait` and `kill` on
-        // overrun. Same pattern as `pi_proxy.rs`.
-        let deadline = t0 + self.config.timeout;
-        let output = loop {
-            match child.try_wait() {
-                Ok(Some(_status)) => {
-                    break child.wait_with_output().map_err(|e| {
-                        LlmError::Transport(format!("collecting claude output: {e}"))
-                    })?;
-                }
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(LlmError::Transport(format!(
-                            "claude did not exit within {} seconds",
-                            self.config.timeout.as_secs()
-                        )));
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => return Err(LlmError::Transport(format!("waiting on claude: {e}"))),
-            }
-        };
+        let cmd = self.build_command(&system_prompt);
+        let output = spawn_and_wait(cmd, &user_blob, self.config.timeout, t0, "claude")?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -335,99 +295,17 @@ struct ClaudeUsage {
     output_tokens: Option<u32>,
 }
 
-/// Partition a slice of [`ChatMessage`]s into system content vs.
-/// everything-else, preserving order within each bucket. Same shape as
-/// `pi_proxy::partition_map` but spelled out inline so the two backends
-/// don't share an unrelated utility.
-fn partition_messages(
-    messages: &[aatxe_council::llm::ChatMessage],
-) -> (Vec<&String>, Vec<&String>) {
-    let mut system = Vec::new();
-    let mut user = Vec::new();
-    for m in messages {
-        match m.role {
-            Role::System => system.push(&m.content),
-            _ => user.push(&m.content),
-        }
-    }
-    (system, user)
-}
-
-fn join_with_blank_lines(parts: &[&String]) -> String {
-    let mut acc = String::new();
-    for p in parts {
-        if !acc.is_empty() {
-            acc.push_str("\n\n");
-        }
-        acc.push_str(p);
-    }
-    acc
-}
-
-/// Strip a single matching markdown fence if present. Mirrors
-/// `pi_proxy::sanitize_text_output` so both backends have identical
-/// downstream behaviour for the proposer/judge JSON parsers.
-fn sanitize_text_output(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if let Some(rest) = trimmed.strip_prefix("```") {
-        if let Some(nl) = rest.find('\n') {
-            let body = &rest[nl + 1..];
-            if let Some(stripped) = body.strip_suffix("```") {
-                return stripped.trim().to_string();
-            }
-        }
-    }
-    trimmed.to_string()
-}
-
-// Tests build only on Unix: they install a `#!/bin/sh` shell script as
-// a fake-claude binary and chmod it via `std::os::unix::fs::PermissionsExt`.
-// Same Unix-only constraint as `pi_proxy.rs`'s test harness.
+// Tests build only on Unix: the shared fixture installs a `#!/bin/sh`
+// fake binary via `std::os::unix::fs::PermissionsExt`.
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::subprocess_llm::test_fixture::{fake_binary, fake_sleeping_binary};
     use aatxe_council::llm::ChatMessage;
     use std::fs;
 
-    /// Compose a tiny shell-script binary that mimics enough of
-    /// `claude`'s `--print` surface for unit tests. The script:
-    ///   * echoes a canned response (passed as `canned_stdout`) to stdout
-    ///   * exits with `exit_code`
-    ///   * writes the invocation argv + stdin to a sidecar file so the
-    ///     test can assert what `ClaudeCodeClient` actually called.
     fn fake_claude(canned_stdout: &str, exit_code: i32) -> (tempfile::TempDir, PathBuf, PathBuf) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let bin = dir.path().join("claude");
-        let capture = dir.path().join("capture.txt");
-        let script = format!(
-            "#!/bin/sh\n\
-             {{ echo \"argv: $@\"; echo '---stdin---'; cat; }} > {cap}\n\
-             printf '%s' {payload}\n\
-             exit {code}\n",
-            cap = shell_escape(capture.to_str().unwrap()),
-            payload = shell_escape(canned_stdout),
-            code = exit_code
-        );
-        fs::write(&bin, script).expect("write fake-claude");
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&bin).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&bin, perms).unwrap();
-        (dir, bin, capture)
-    }
-
-    fn shell_escape(s: &str) -> String {
-        let mut out = String::with_capacity(s.len() + 2);
-        out.push('\'');
-        for c in s.chars() {
-            if c == '\'' {
-                out.push_str("'\\''");
-            } else {
-                out.push(c);
-            }
-        }
-        out.push('\'');
-        out
+        fake_binary("claude", canned_stdout, exit_code)
     }
 
     fn cfg_with(bin: PathBuf) -> ClaudeCodeConfig {
@@ -699,14 +577,7 @@ mod tests {
 
     #[test]
     fn timeout_kills_the_child_and_returns_transport_error() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let bin = dir.path().join("claude");
-        fs::write(&bin, "#!/bin/sh\nsleep 30\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut p = fs::metadata(&bin).unwrap().permissions();
-        p.set_mode(0o755);
-        fs::set_permissions(&bin, p).unwrap();
-
+        let (_dir, bin) = fake_sleeping_binary("claude", 30);
         let mut cfg = cfg_with(bin);
         cfg.timeout = Duration::from_millis(300);
         let client = ClaudeCodeClient::new(cfg);
@@ -759,16 +630,6 @@ mod tests {
         assert!(
             !cfg.bare,
             "default bare must be false to let OAuth/keychain auth work"
-        );
-    }
-
-    #[test]
-    fn sanitize_strips_only_fenced_blocks() {
-        assert_eq!(sanitize_text_output("plain"), "plain");
-        assert_eq!(sanitize_text_output("   plain   "), "plain");
-        assert_eq!(
-            sanitize_text_output("```json\n{\"a\":1}\n```"),
-            r#"{"a":1}"#
         );
     }
 }

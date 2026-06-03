@@ -80,13 +80,17 @@ fn main() {
                 let slot = idx % pool.len();
                 let input = pool[slot].drain(..).collect::<Vec<_>>();
                 chunk_idx.set(idx + 1);
-                let c = chunk_for_review_owned(std::hint::black_box(input), ChunkPolicy::default());
+                let c = chunk_for_review_owned(
+                    std::hint::black_box(input),
+                    &[],
+                    ChunkPolicy::default(),
+                );
                 // Recover the drained files back into the pool slot so the
                 // next iteration can reuse it.
                 pool[slot] = c.into_iter().flat_map(|ch| ch.files).collect();
                 std::hint::black_box(());
             });
-            chunk_for_review_owned(filtered, ChunkPolicy::default())
+            chunk_for_review_owned(filtered, &[], ChunkPolicy::default())
         };
 
         // 4. Proposer prompt (first chunk, or empty)

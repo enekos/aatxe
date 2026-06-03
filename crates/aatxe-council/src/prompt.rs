@@ -118,7 +118,8 @@ fn pick_fence(body: &str) -> String {
 ///      inside its body, so a `\`\`\`` (or longer) sequence in the diff
 ///      or file cannot break out of the fence and inject literal markdown
 ///      / instructions.
-pub fn build_proposer_user_message(chunk: &DiffChunk) -> String {
+#[cfg(test)]
+pub(crate) fn build_proposer_user_message(chunk: &DiffChunk) -> String {
     build_proposer_user_message_with_scope(chunk, "")
 }
 
@@ -127,7 +128,7 @@ pub fn build_proposer_user_message(chunk: &DiffChunk) -> String {
 /// and the diff. When `ast_scope` is empty or whitespace-only the
 /// section is fully omitted and this function returns the same string
 /// the no-scope variant does.
-pub fn build_proposer_user_message_with_scope(chunk: &DiffChunk, ast_scope: &str) -> String {
+pub(crate) fn build_proposer_user_message_with_scope(chunk: &DiffChunk, ast_scope: &str) -> String {
     let context_bytes: usize = chunk
         .files
         .iter()

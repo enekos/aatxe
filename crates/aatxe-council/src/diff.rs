@@ -107,7 +107,7 @@ pub struct DiffChunk {
     /// renders these in a dedicated "Related repository context" block,
     /// distinct from the per-file `context` on each [`ParsedFile`].
     ///
-    /// Filled by `chunk_for_review` from its `related` argument, applying
+    /// Filled by [`chunk_for_review`] from its `related` argument, applying
     /// [`ChunkPolicy::max_related_context_bytes`] for per-file truncation
     /// and [`ChunkPolicy::max_chunk_related_bytes`] as a chunk-level cap.
     /// Files that don't fit are dropped silently (the diff and per-file
@@ -447,14 +447,10 @@ pub fn filter_ignored(files: Vec<ParsedFile>, patterns: &[&str]) -> (Vec<ParsedF
 ///   `current_bytes + file.body.len() <= policy.max_chunk_bytes`.
 /// * A single file larger than the chunk budget is emitted on its own
 ///   (post-truncation it fits by construction).
-pub fn chunk_for_review(files: &[ParsedFile], policy: ChunkPolicy) -> Vec<DiffChunk> {
-    chunk_for_review_with_related(files, &[], policy)
-}
-
-/// Like [`chunk_for_review`] but also attaches `related` files (helpers
-/// / patterns the diff *references* but doesn't modify) to every chunk
-/// produced. The same list of related files is shared across chunks —
-/// the chunker re-applies the per-chunk budget independently for each.
+///
+/// The `related` argument supplies helper files the diff *references*
+/// but doesn't modify; the same list is shared across chunks, with the
+/// per-chunk budget re-applied for each.
 ///
 /// Related-file truncation:
 /// * Each file is truncated to `policy.max_related_context_bytes`
@@ -464,7 +460,11 @@ pub fn chunk_for_review(files: &[ParsedFile], policy: ChunkPolicy) -> Vec<DiffCh
 ///   `policy.max_chunk_related_bytes`. Files past the budget are
 ///   dropped — silently from the model's view, but the harness still
 ///   knows what it asked for and logs are still in tact.
-pub fn chunk_for_review_with_related(
+///
+/// For callers that own the file list (typically after [`filter_ignored`]),
+/// see [`chunk_for_review_owned`] — it moves bodies instead of cloning
+/// them.
+pub fn chunk_for_review(
     files: &[ParsedFile],
     related: &[RelatedFile],
     policy: ChunkPolicy,
@@ -528,16 +528,11 @@ pub fn chunk_for_review_with_related(
     chunks
 }
 
-/// Owned variant of [`chunk_for_review`] that takes `Vec<ParsedFile>` by
-/// value and **moves** bodies instead of cloning them.  For callers that
-/// already own the file list (e.g. after `filter_ignored`) this avoids a
-/// full copy of every file body when no truncation is needed.
-pub fn chunk_for_review_owned(files: Vec<ParsedFile>, policy: ChunkPolicy) -> Vec<DiffChunk> {
-    chunk_for_review_with_related_owned(files, &[], policy)
-}
-
-/// Owned variant of [`chunk_for_review_with_related`].
-pub fn chunk_for_review_with_related_owned(
+/// Owned variant of [`chunk_for_review`] that takes `Vec<ParsedFile>`
+/// by value and **moves** bodies instead of cloning them. For callers
+/// that already own the file list (e.g. after [`filter_ignored`]) this
+/// avoids a full copy of every file body when no truncation is needed.
+pub fn chunk_for_review_owned(
     files: Vec<ParsedFile>,
     related: &[RelatedFile],
     policy: ChunkPolicy,
@@ -765,7 +760,7 @@ rename to new.txt
             max_file_bytes: 1024,
             ..ChunkPolicy::default()
         };
-        let chunks = chunk_for_review(&[small.clone(), big, small.clone()], policy);
+        let chunks = chunk_for_review(&[small.clone(), big, small.clone()], &[], policy);
         // Small files: one fits with the (truncated) big file? No — big > budget so
         // it ends up alone in its own chunk. Then small + small fit together.
         assert!(chunks.len() >= 2);
@@ -845,7 +840,7 @@ rename to new.txt
             max_chunk_context_bytes: 64 * 1024,
             ..ChunkPolicy::default()
         };
-        let chunks = chunk_for_review(&[f], policy);
+        let chunks = chunk_for_review(&[f], &[], policy);
         assert_eq!(chunks.len(), 1);
         let ctx = chunks[0].files[0]
             .context
@@ -887,7 +882,7 @@ rename to new.txt
             max_file_bytes: 4096,
             ..ChunkPolicy::default()
         };
-        let chunks = chunk_for_review_with_related(&files, &related, policy);
+        let chunks = chunk_for_review(&files, &related, policy);
         assert!(chunks.len() >= 2, "files should split into separate chunks");
         for c in &chunks {
             assert_eq!(c.related.len(), 2, "every chunk carries the related set");
@@ -917,7 +912,7 @@ rename to new.txt
             max_chunk_related_bytes: 4096,
             ..ChunkPolicy::default()
         };
-        let chunks = chunk_for_review_with_related(&files, &[big], policy);
+        let chunks = chunk_for_review(&files, &[big], policy);
         assert_eq!(chunks.len(), 1);
         let r = &chunks[0].related[0];
         assert!(r.content.contains("[truncated"));
@@ -947,7 +942,7 @@ rename to new.txt
             max_chunk_related_bytes: 12_000,
             ..ChunkPolicy::default()
         };
-        let chunks = chunk_for_review_with_related(&files, &related, policy);
+        let chunks = chunk_for_review(&files, &related, policy);
         let paths: Vec<&str> = chunks[0].related.iter().map(|r| r.path.as_str()).collect();
         assert_eq!(paths, vec!["a.rs", "b.rs"]);
     }
@@ -976,7 +971,7 @@ rename to new.txt
             max_chunk_context_bytes: 12 * 1024,
             ..ChunkPolicy::default()
         };
-        let chunks = chunk_for_review(&files, policy);
+        let chunks = chunk_for_review(&files, &[], policy);
         assert_eq!(chunks.len(), 1, "all three diffs fit in one chunk");
         let ctxs: Vec<bool> = chunks[0]
             .files

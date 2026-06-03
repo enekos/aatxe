@@ -41,9 +41,8 @@ pub fn render_scope_block(workspace: &[(String, FileGraph)], changed_paths: &[St
 }
 
 /// Like [`render_scope_block`] but with a caller-specified byte cap.
-/// Exposed so tests can exercise the truncation path without 8KB
-/// fixtures.
-pub fn render_scope_block_with_cap(
+/// Lets tests exercise the truncation path without 8KB fixtures.
+pub(crate) fn render_scope_block_with_cap(
     workspace: &[(String, FileGraph)],
     changed_paths: &[String],
     cap: usize,

@@ -9,8 +9,8 @@
 //! dependency tree as light as the rest of aatxe.
 
 use crate::diff::{
-    attach_file_contexts, chunk_for_review_with_related_owned, filter_ignored, parse_unified_diff,
-    ChunkPolicy, RelatedFile, DEFAULT_IGNORED_PATTERNS,
+    attach_file_contexts, chunk_for_review_owned, filter_ignored, parse_unified_diff, ChunkPolicy,
+    RelatedFile, DEFAULT_IGNORED_PATTERNS,
 };
 use crate::events::{CouncilEvent, EventSink, NullSink};
 use crate::llm::LlmClient;
@@ -156,7 +156,7 @@ pub fn run_council_with_files(
         })
         .collect();
     related.sort_by(|a, b| a.path.cmp(&b.path));
-    let chunks = chunk_for_review_with_related_owned(kept, &related, opts.chunk_policy);
+    let chunks = chunk_for_review_owned(kept, &related, opts.chunk_policy);
 
     opts.event_sink.emit(&CouncilEvent::Start {
         repo: opts.repo.clone(),
