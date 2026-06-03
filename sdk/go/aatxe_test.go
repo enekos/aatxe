@@ -129,15 +129,18 @@ func TestDefaultOptions(t *testing.T) {
 
 func TestBenchWithFiveIterations(t *testing.T) {
 	s := NewSuite("svc")
-	// Fixed-shape opts let us pin the iteration count exactly.
+	// Fixed-shape opts let us pin the iteration count exactly. File is
+	// overridden via Options.File rather than the now-removed positional
+	// argument; an empty File would derive from runtime.Caller.
 	opts := Options{
 		Warmup:        0,
 		MinIterations: 5,
 		MaxIterations: 5,
 		TimeBudget:    time.Second,
 		TargetCV:      0,
+		File:          "fixture.go",
 	}
-	s.BenchWith("pinned", "fixture.go", opts, func() {
+	s.BenchWith("pinned", opts, func() {
 		_ = 1 + 1
 	})
 	r := s.IntoReport()
@@ -146,6 +149,16 @@ func TestBenchWithFiveIterations(t *testing.T) {
 	}
 	if r.Runs[0].File != "fixture.go" {
 		t.Fatalf("file: %s", r.Runs[0].File)
+	}
+}
+
+func TestBenchDerivesFileFromCaller(t *testing.T) {
+	s := NewSuite("svc")
+	s.Bench("from-caller", func() { _ = 1 })
+	r := s.IntoReport()
+	// Should resolve to this test file's path (relative to CWD).
+	if !strings.Contains(r.Runs[0].File, "aatxe_test.go") {
+		t.Fatalf("expected file to contain aatxe_test.go, got %q", r.Runs[0].File)
 	}
 }
 

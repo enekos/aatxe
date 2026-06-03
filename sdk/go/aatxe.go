@@ -1,22 +1,5 @@
 // Package aatxe is the Go SDK for the aatxe microbenchmark + regression tool.
 //
-// Two integration patterns are supported.
-//
-// # Pattern 1 — wrap `testing.B`
-//
-// Use the standard `go test -bench=...` runner. Replace `b.Run` bench bodies
-// with `aatxe.Bench(b, name, fn)` to enrich the report with per-sample
-// timings the standard `b.N ns/op` line doesn't carry. Aatxe's Go adapter
-// parses the resulting JSON stream from `go test -bench=. -json`.
-//
-//	func BenchmarkParseFoo(b *testing.B) {
-//	    aatxe.Bench(b, "parseFoo", func() {
-//	        _ = parseFoo("hello")
-//	    })
-//	}
-//
-// # Pattern 2 — standalone runner that emits a RunReport directly
-//
 // Build a small `main` that uses [Suite] / [Suite.Bench] and writes the
 // finished report to stdout with [Suite.EmitStdout]. Wire it into
 // `aatxe run --lang go` by setting `AATXE_GO_RUNNER` to invoke your binary.
@@ -27,24 +10,21 @@
 //	    s.EmitStdout()
 //	}
 //
-// In both cases the resulting `RunReport` has the same shape as the Rust
-// and TS reports, so the aatxe CLI compares them uniformly.
+// The resulting `RunReport` has the same shape as the Rust and TS reports,
+// so the aatxe CLI compares them uniformly.
 //
 // # Defeating dead-code elimination
 //
 // Go's compiler will happily elide pure expressions whose results are
 // discarded. A benchmark of `parseFoo("x")` whose return value flows to `_`
 // can be optimised down to nothing, and you measure the cost of an empty
-// loop. Two equivalent escape hatches are provided:
+// loop. Use [Keep] to mark the value as observed:
 //
-//	// Option A — assign to the package-level sink:
-//	aatxe.Sink = parseFoo("x")
-//
-//	// Option B — wrap in Keep[T]:
 //	aatxe.Keep(parseFoo("x"))
 //
-// Both make the value observable from outside the benchmarked function and
-// prevent the compiler from proving the call is pure.
+// `Keep` writes to a package-level sink (also exposed as [Sink] for
+// authors who prefer the explicit form `aatxe.Sink = parseFoo("x")`),
+// preventing the compiler from proving the call is pure.
 package aatxe
 
 import (
@@ -54,7 +34,6 @@ import (
 	"os"
 	"runtime"
 	"sort"
-	"testing"
 	"time"
 )
 
@@ -87,6 +66,9 @@ type Options struct {
 	MaxIterations int
 	TimeBudget    time.Duration
 	TargetCV      float64
+	// File overrides the source-file tag recorded for the bench. When empty,
+	// the SDK derives it from runtime.Caller at the BenchWith call site.
+	File string
 }
 
 // DefaultOptions returns the standard aatxe defaults.
@@ -98,6 +80,17 @@ func DefaultOptions() Options {
 		TimeBudget:    time.Second,
 		TargetCV:      0.02,
 	}
+}
+
+// Metric is a non-time metric attached to a BenchRun. See the Rust
+// aatxe-core::Metric type for the canonical contract. Adding metrics does
+// not bump the schema version — they're a forward-compatible extension
+// point for throughput, allocations, custom counters.
+type Metric struct {
+	Name          string  `json:"name"`
+	Value         float64 `json:"value"`
+	Unit          string  `json:"unit"`
+	LowerIsBetter *bool   `json:"lowerIsBetter,omitempty"`
 }
 
 // BenchRun mirrors aatxe-core's BenchRun. Field tags are in lower-camelCase
@@ -121,6 +114,10 @@ type BenchRun struct {
 	P50         float64   `json:"p50"`
 	P95         float64   `json:"p95"`
 	P99         float64   `json:"p99"`
+	// Optional non-time metrics. Serialised only when non-empty.
+	Metrics []Metric `json:"metrics,omitempty"`
+	// Optional free-form tags for filtering / grouping.
+	Tags []string `json:"tags,omitempty"`
 }
 
 // RunReport is the top-level on-disk structure produced by the SDK.
@@ -172,14 +169,40 @@ func NewSuite(service string) *Suite {
 }
 
 // Bench measures fn under [DefaultOptions] and accumulates the result.
+// The source-file tag is derived from runtime.Caller.
 func (s *Suite) Bench(name string, fn func()) {
-	s.BenchWith(name, "<inline>", DefaultOptions(), fn)
+	file := callerFile(2)
+	s.benchInternal(name, file, DefaultOptions(), fn)
 }
 
-// BenchWith is the full-control form: caller-supplied options and source-file tag.
-func (s *Suite) BenchWith(name, file string, opts Options, fn func()) {
+// BenchWith is the full-control form. Source-file tag is taken from
+// opts.File when set, otherwise derived from runtime.Caller.
+func (s *Suite) BenchWith(name string, opts Options, fn func()) {
+	file := opts.File
+	if file == "" {
+		file = callerFile(2)
+	}
+	s.benchInternal(name, file, opts, fn)
+}
+
+func (s *Suite) benchInternal(name, file string, opts Options, fn func()) {
 	samples, batchSize, elapsedNs := runLoop(opts, fn)
 	s.runs = append(s.runs, summarise(name, file, samples, batchSize, elapsedNs))
+}
+
+// callerFile returns a repo-relative path to the source file `skip` frames
+// up the stack. Falls back to "<inline>" if runtime.Caller fails.
+func callerFile(skip int) string {
+	_, file, _, ok := runtime.Caller(skip)
+	if !ok || file == "" {
+		return "<inline>"
+	}
+	// Trim to repo-relative when CWD is a prefix; otherwise return as-is.
+	if cwd, err := os.Getwd(); err == nil && len(file) > len(cwd) && file[:len(cwd)] == cwd {
+		// +1 to drop the leading separator.
+		return file[len(cwd)+1:]
+	}
+	return file
 }
 
 // IntoReport finalises the suite into a RunReport without emitting it.
@@ -207,17 +230,6 @@ func (s *Suite) EmitStdout() {
 		os.Exit(1)
 	}
 	fmt.Println(string(buf))
-}
-
-// Bench is the pattern-1 helper: wrap `testing.B` to capture per-sample
-// timings as ns/op events for `go test -bench=. -json` ingestion.
-func Bench(b *testing.B, name string, fn func()) {
-	b.Helper()
-	b.Run(name, func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			fn()
-		}
-	})
 }
 
 // runLoop drives the adaptive sampling loop and returns per-sample timings

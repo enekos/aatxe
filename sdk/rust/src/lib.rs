@@ -45,10 +45,17 @@ use std::time::{Duration, Instant};
 /// from constant-folding or DCE-ing the benched expression.
 pub use std::hint::black_box;
 
-/// Force-consume a value so the optimiser cannot prove it is unused.
-/// Equivalent to [`black_box`], named for parity with the Go SDK's `Keep`.
+/// Defeat dead-code elimination on a benched expression. Returns `v`
+/// unchanged so it can be chained inline:
+///
+/// ```ignore
+/// bench(&mut suite, "parse", || { keep(parse_phone("x")); });
+/// ```
+///
+/// Equivalent to [`black_box`] but named for cross-SDK parity with the TS
+/// (`keep`) and Go (`Keep`) authoring APIs. Use whichever reads better.
 #[inline(always)]
-pub fn consume<T>(v: T) -> T {
+pub fn keep<T>(v: T) -> T {
     black_box(v)
 }
 
@@ -133,6 +140,8 @@ impl Suite {
             p50: s.p50,
             p95: s.p95,
             p99: s.p99,
+            metrics: Vec::new(),
+            tags: Vec::new(),
         });
     }
 
@@ -370,9 +379,9 @@ mod tests {
     }
 
     #[test]
-    fn consume_and_black_box_are_re_exported() {
+    fn keep_and_black_box_are_re_exported() {
         // Compile-time check that the ergonomic re-exports exist and apply.
-        let v = consume(7u64);
+        let v = keep(7u64);
         let w = black_box(v.wrapping_add(1));
         assert_eq!(w, 8);
     }
