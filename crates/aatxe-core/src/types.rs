@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// Schema version for the on-disk JSON report. Bumped on incompatible changes.
 ///
-/// `v1` was the legacy `perfdiff` shape; aatxe starts at `v2` and adds
+/// `v1` was an earlier legacy shape; aatxe starts at `v2` and adds
 /// [`RunReport::affected_scope`] and [`Language`].
 pub const SCHEMA_VERSION: u32 = 2;
 

@@ -25,15 +25,15 @@ exit-code gate. The perf gate above is untouched by it.
 
 ## Why this rebuild
 
-Aatxe is a clean-slate Rust rebuild of the JOIN-internal `perfdiff` tool
+Aatxe is a clean-slate Rust rebuild of an older Node-only perf-diff tool,
 with three sharper goals:
 
-* **Polyglot at the boundary.** The original was Node-only. Aatxe defines a
-  single JSON `RunReport` schema; per-language SDKs (`@aatxe/bench` for TS,
-  `aatxe-bench` for Rust, the `aatxe` Go module) produce it. The Rust CLI
-  handles comparison, rendering, the sticky comment, and the affected-set
-  resolver — the *hard* parts only need to exist once.
-* **GitHub Actions, not CircleCI.** Workflows ship in `.github/workflows/`,
+* **Polyglot at the boundary.** Aatxe defines a single JSON `RunReport`
+  schema; per-language SDKs (`@aatxe/bench` for TS, `aatxe-bench` for Rust,
+  the `aatxe` Go module) produce it. The Rust CLI handles comparison,
+  rendering, the sticky comment, and the affected-set resolver — the
+  *hard* parts only need to exist once.
+* **GitHub Actions first-class.** Workflows ship in `.github/workflows/`,
   including a reusable `aatxe.yml` that downstream services can call.
 * **Testable end-to-end.** The core (`aatxe-core`) is pure — no IO, no
   globals — and ships 52 unit + integration tests covering stats, the
