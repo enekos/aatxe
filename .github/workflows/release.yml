@@ -63,10 +63,24 @@ jobs:
 
       # Cross-compile aarch64 Linux via the official `cross` toolchain —
       # avoids having to provision a multi-arch GHA runner. macOS builds
-      # are native (Apple silicon and Intel runners are both first-party).
+      # are native (the macos-14 runner cross-compiles to x86_64-darwin
+      # against the universal SDK).
       - name: install cross
         if: matrix.cross == true
         run: cargo install cross --locked --version 0.2.5
+
+      # `cross` pulls its toolchain image from `ghcr.io/cross-rs/<target>`,
+      # which the unauthenticated `docker` daemon on GH-hosted runners can
+      # rate-limit ("docker: Error response from daemon: unauthorized").
+      # Authenticating with GITHUB_TOKEN — which the runner already has,
+      # scoped to its own repository — sidesteps the limit entirely
+      # because GHCR treats authenticated reads of public images
+      # differently from anonymous ones.
+      - name: ghcr login (cross images)
+        if: matrix.cross == true
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: build
         shell: bash
