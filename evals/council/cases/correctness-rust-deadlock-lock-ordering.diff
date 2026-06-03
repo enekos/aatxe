@@ -1,0 +1,29 @@
+diff --git a/src/inventory/mod.rs b/src/inventory/mod.rs
+index 1111111..2222222 100644
+--- a/src/inventory/mod.rs
++++ b/src/inventory/mod.rs
+@@ -42,4 +42,22 @@
+                 reserved: Default::default(),
+             }),
+         }
+     }
++
++    /// Reserve `qty` of `sku` and price the reservation against the
++    /// current pricing snapshot. Returns the priced reservation.
++    pub fn reserve_and_price(
++        &self,
++        pricing: &PricingEngine,
++        sku: &str,
++        qty: u32,
++    ) -> Result<u64, String> {
++        let mut inv = self.inventory_lock.lock().expect("poisoned inventory");
++        let on_hand = inv.on_hand.get(sku).copied().unwrap_or(0);
++        let reserved = inv.reserved.get(sku).copied().unwrap_or(0);
++        if on_hand.saturating_sub(reserved) < qty {
++            return Err(format!("insufficient stock for {sku}"));
++        }
++        let unit_price = pricing.unit_price_cents(sku);
++        inv.reserved.insert(sku.to_string(), reserved + qty);
++        Ok(unit_price as u64 * qty as u64)
++    }
+ }

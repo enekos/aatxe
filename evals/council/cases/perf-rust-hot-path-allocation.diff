@@ -1,0 +1,20 @@
+diff --git a/src/handlers/lookup.rs b/src/handlers/lookup.rs
+index 1111111..2222222 100644
+--- a/src/handlers/lookup.rs
++++ b/src/handlers/lookup.rs
+@@ -16,8 +16,12 @@
+ /// scratch strings. The `TenantCache` API has both `get(&str)` and
+ /// `get_owned(&String)` for exactly this reason.
+ pub fn route_limits(cache: &TenantCache, req: &Request) -> Vec<Response> {
+     let mut out = Vec::with_capacity(req.tenants.len());
+     for tenant in &req.tenants {
+-        let limit = cache.get(tenant.id, &req.route).unwrap_or(0);
++        let key = format!("limit:{}:{}", tenant.id, req.route);
++        let limit = cache.get_owned(&key).unwrap_or(0);
+         out.push(Response {
+             tenant_id: tenant.id.clone(),
+             limit,
+         });
+     }
+     out
+ }

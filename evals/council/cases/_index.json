@@ -15,6 +15,15 @@
     "correctness-cache-race-stale-ttl.json",
     "perf-django-export-n-plus-one.json",
     "security-authz-idor-export-route.json",
-    "maintainability-rust-reinvents-counters.json"
+    "maintainability-rust-reinvents-counters.json",
+    "security-jwt-verify-order.json",
+    "correctness-rust-async-cancel-unsafe.json",
+    "correctness-go-context-cleanup-goroutine.json",
+    "security-sql-injection-builder-bypass.json",
+    "correctness-rust-deadlock-lock-ordering.json",
+    "correctness-go-channel-leak-no-close.json",
+    "security-tenant-leak-query.json",
+    "perf-rust-hot-path-allocation.json",
+    "correctness-ts-async-error-swallow.json"
   ]
 }

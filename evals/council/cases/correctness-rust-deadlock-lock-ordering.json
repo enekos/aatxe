@@ -1,0 +1,26 @@
+{
+  "name": "correctness-rust-deadlock-lock-ordering",
+  "description": "Rust PR introducing `Inventory::reserve_and_price` that acquires `inventory_lock` FIRST then calls `pricing.unit_price_cents(sku)`, which acquires `pricing_lock` SECOND. The inventory module's own top-of-file invariant comment explicitly mandates the opposite ordering ('pricing_lock FIRST, then inventory_lock') and references INC-3041, a real 8-minute production deadlock from 2026-02-14. The bug is only visible if the reviewer reads the documented invariant in the same file (or sibling pricing.rs's `with_pricing` helper that exists specifically to enforce the order). Classic AB-BA lockset.",
+  "diff": "correctness-rust-deadlock-lock-ordering.diff",
+  "filesDir": "files/correctness-rust-deadlock-lock-ordering",
+  "expected": [
+    {
+      "file": "src/inventory/mod.rs",
+      "lineRange": [53, 60],
+      "severity": "critical",
+      "category": "correctness",
+      "description": "Lock-ordering inversion → AB-BA deadlock risk. `reserve_and_price` acquires `inventory_lock` on line 53 then calls `pricing.unit_price_cents(sku)` on line 60, which acquires `pricing_lock`. Any concurrent code path that legitimately holds `pricing_lock` (e.g. `pricing.with_pricing(|| ...)`) and tries to inspect inventory will deadlock against this. The same file's docstring (lines 5–20) documents the canonical order as 'pricing_lock FIRST, then inventory_lock' and points at INC-3041 (an 8-minute production outage from this exact bug shape). Fix: use `pricing.with_pricing(|state| ...)` to capture the unit price BEFORE locking inventory, or restructure the function to acquire pricing first.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/inventory/mod.rs",
+      "lineRange": [47, 63],
+      "severity": "major",
+      "category": "maintainability",
+      "description": "The new function bypasses the project's `PricingEngine::with_pricing` helper that exists *specifically* to enforce correct lock ordering (see pricing/mod.rs:34). New code that needs both locks should always route through that helper — the moment a single caller takes a shortcut, the invariant is one bad refactor away from breaking again. Either route through `with_pricing` or move the helper into a shared `locks::` module and document this as the only way to acquire both.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 4
+}

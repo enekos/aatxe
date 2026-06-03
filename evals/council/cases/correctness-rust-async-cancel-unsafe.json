@@ -1,0 +1,42 @@
+{
+  "name": "correctness-rust-async-cancel-unsafe",
+  "description": "Multi-file Rust async upload handler PR that holds a tokio Mutex across two `await` points (file create + write + fsync) and runs metrics-bump + commit eagerly inside that critical section. The post-PR shape is unsafe under three failure modes the reviewer must catch: (1) task cancellation between the await points leaks a reserved ID (the FileIndex invariant in src/state/file_index.rs explicitly warns 6.2k orphan reservations from a prior incident), (2) any `?`-propagated io error after `reserve_id` returns leaks the ID too because `abort()` is never called, (3) `metrics.write_started` is now incremented even on cancellation/error paths so the dashboard double-counts. The bug shape requires understanding tokio cancellation semantics + the file_index invariant documented in a sibling file.",
+  "diff": "correctness-rust-async-cancel-unsafe.diff",
+  "filesDir": "files/correctness-rust-async-cancel-unsafe",
+  "expected": [
+    {
+      "file": "src/handlers/upload.rs",
+      "lineRange": [13, 26],
+      "severity": "critical",
+      "category": "correctness",
+      "description": "Holds `state.file_index.lock().await` across three `await` points (File::create, write_all, sync_all). If the handler future is dropped mid-await (request timeout, client disconnect, axum drop, tokio::select! loser), the MutexGuard releases BUT no `commit` or `abort` runs — leaking the reserved ID forever. The invariant in src/state/file_index.rs explicitly documents this failure mode (6.2k orphan IDs in a prior incident). Fix: scope-guard with an RAII `Aborter` that calls `idx.abort(id)` on drop unless explicitly defused, or restructure so reserve+commit bracket the IO without holding the lock across awaits.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/handlers/upload.rs",
+      "lineRange": [20, 24],
+      "severity": "major",
+      "category": "correctness",
+      "description": "Any `?`-propagated `io::Error` from File::create / write_all / sync_all returns from the function without calling `idx.abort(id)` or `idx.commit(id)`. The reserved ID is leaked even on a non-cancellation failure (disk full, EIO, permissions). Same orphan-reservation bug as the cancellation case, but easier to trigger.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/handlers/upload.rs",
+      "lineRange": [18, 18],
+      "severity": "major",
+      "category": "correctness",
+      "description": "`state.metrics.write_started` is now incremented inside the critical section BEFORE the write completes, and `write_completed` only runs on the success path. Any cancellation / io-error / panic leaves write_started incremented with no matching write_completed — the in-flight gauge double-counts and drifts upward over time.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/handlers/upload.rs",
+      "lineRange": [13, 26],
+      "severity": "minor",
+      "category": "performance",
+      "description": "Holding the file_index mutex across three disk IO awaits serializes all concurrent uploads on the index lock — under load this collapses upload throughput to single-writer rate. Reserve under lock, drop the lock, write, re-acquire briefly to commit.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 6
+}

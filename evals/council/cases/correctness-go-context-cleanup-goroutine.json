@@ -1,0 +1,34 @@
+{
+  "name": "correctness-go-context-cleanup-goroutine",
+  "description": "Go upload handler PR that 'optimises' a 200ms inline cleanup by spawning it as a goroutine, but passes the request context to it. The request ctx is cancelled the moment the HTTP handler returns (which happens IMMEDIATELY after `go cleanupOldUploads` because the handler has nothing else to do). cleanup.go's docstring explicitly warns 'caller is responsible for handing in a context that lives long enough' and the function bails on `ctx.Err()` at entry — so the goroutine wakes up, finds ctx cancelled, and exits without doing anything. The 200ms saved is paid for by the cleanup NEVER running. Compounded by no error handling, no concurrency cap, and silent loss of any cleanup error since the goroutine has no caller to propagate to.",
+  "diff": "correctness-go-context-cleanup-goroutine.diff",
+  "filesDir": "files/correctness-go-context-cleanup-goroutine",
+  "expected": [
+    {
+      "file": "handler.go",
+      "lineRange": [21, 24],
+      "severity": "critical",
+      "category": "correctness",
+      "description": "`go cleanupOldUploads(ctx, s.store)` passes the request context to a goroutine that outlives the request. The request ctx is cancelled by the net/http server the instant UploadHandler returns (i.e. ~one statement later). cleanup.go's `cleanupOldUploads` checks `ctx.Err()` at entry as a fast-path bail-out, AND inside its loop — so the cleanup goroutine wakes up, finds the context already cancelled, and exits immediately without doing anything. The 'optimisation' silently disables cleanup. Fix: pass `context.WithoutCancel(ctx)` (Go 1.21+) or a fresh `context.Background()` with an explicit timeout.",
+      "mustCatch": true
+    },
+    {
+      "file": "handler.go",
+      "lineRange": [21, 24],
+      "severity": "major",
+      "category": "correctness",
+      "description": "The goroutine has no concurrency cap. Under sustained upload load each request spawns a cleanup goroutine; every cleanup scan touches ~10k rows per cleanup.go's comment and could run 5–30 seconds. A modest 100 req/s sustained will leak goroutines + DB connections faster than they can finish. Should be a single bounded background worker fed via a channel, OR rate-gated.",
+      "mustCatch": true
+    },
+    {
+      "file": "handler.go",
+      "lineRange": [21, 24],
+      "severity": "major",
+      "category": "maintainability",
+      "description": "cleanupOldUploads returns nothing (void) and only `log.Printf`s on error — the goroutine variant inherits that, so any cleanup error is silently observable only via grep'd logs. Worse, with the cancelled-ctx bug above the visible symptom is 'no cleanup logs at all' rather than a loud failure — the team will notice via disk-fill, not by reading the diff. Recommend at minimum a metric counter and a sentinel log.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 5
+}

@@ -1,0 +1,34 @@
+{
+  "name": "correctness-ts-async-error-swallow",
+  "description": "Express/TS checkout handler PR that wraps `payments.charge()` in `try { … } catch { console.error(...) }` under the rationale of 'not blocking the response when the provider hiccups'. The PaymentsClient docstring (src/services/payments.ts:1–8) explicitly states the contract: thrown error means the payment is NOT booked, and the caller MUST treat the order as unpaid. The diff inverts this — after the swallow, the handler still runs `markOrderPaid(orderId)` and `markOrderShipped(orderId)`, so a failed charge produces a paid+shipped order with no money received. Free orders, at scale. The bug requires reading the payments.ts contract comment to recognise the violated invariant.",
+  "diff": "correctness-ts-async-error-swallow.diff",
+  "filesDir": "files/correctness-ts-async-error-swallow",
+  "expected": [
+    {
+      "file": "src/handlers/checkout.ts",
+      "lineRange": [21, 26],
+      "severity": "critical",
+      "category": "correctness",
+      "description": "The try/catch swallows the `payments.charge` error to console.error, then unconditionally runs `markOrderPaid` (line 28) and `markOrderShipped` (line 29). The PaymentsClient contract (src/services/payments.ts:1–8) is explicit: a thrown error means the payment was NOT booked and the caller MUST treat the order as unpaid. Net effect: any provider hiccup ships a free order. Fix: revert the try/catch — let the error propagate to the request handler so the response surfaces a 5xx AND the order stays in a pending/unpaid state.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/handlers/checkout.ts",
+      "lineRange": [21, 26],
+      "severity": "major",
+      "category": "security",
+      "description": "Money-handling code path with a swallowed error is also a fraud-vector: an attacker who can produce repeatable PaymentsClient errors (provider rate-limit, malformed customer, network partition replayable) gets unbounded free orders. The audit trail is `console.error` lines that no SIEM is grep'ing for. At minimum the catch should: (a) re-throw, (b) write a structured `payment.charge.failed` metric the alerting pager wakes someone for, and (c) be tested with an injected failure that asserts the response is non-2xx AND the order row's status is NOT 'paid'.",
+      "mustCatch": false
+    },
+    {
+      "file": "src/handlers/checkout.ts",
+      "lineRange": [19, 20],
+      "severity": "minor",
+      "category": "maintainability",
+      "description": "The 'don't block the response when the provider hiccups' comment is actively misleading — it makes a future maintainer believe the try/catch is doing graceful degradation when it's actually corrupting the order state machine. Remove the comment AND the try/catch.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 4
+}

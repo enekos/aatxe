@@ -77,19 +77,26 @@ pub struct ClaudeCodeConfig {
     /// repo being reviewed. Defaults to the parent process's cwd.
     pub cwd: Option<PathBuf>,
     /// Pass `--bare` to skip hooks/LSP/plugin sync/CLAUDE.md auto-discovery.
-    /// Defaults to `true`: council calls are short-lived one-shots and we
-    /// want them deterministic across user environments. Flip to `false`
-    /// to opt back into the user's normal Claude Code setup.
+    /// Defaults to `false`: `--bare` explicitly disables OAuth + keychain
+    /// auth reads (per `claude --help`: "Anthropic auth is strictly
+    /// ANTHROPIC_API_KEY or apiKeyHelper via --settings"), which would
+    /// break the whole "council uses your Claude Code subscription"
+    /// promise on every machine that doesn't have `ANTHROPIC_API_KEY`
+    /// set. Opt in with `CLAUDE_BARE=1` when you do have an API-key
+    /// auth path AND want maximum determinism (no hooks, no
+    /// auto-CLAUDE.md, no plugins) — for council CI use, typically yes;
+    /// for an engineer running it on their laptop against their
+    /// subscription, no.
     pub bare: bool,
 }
 
 impl ClaudeCodeConfig {
-    /// Discover from environment. Reads three env vars: `CLAUDE_BIN`
+    /// Discover from environment. Reads four env vars: `CLAUDE_BIN`
     /// (overrides the executable path — useful when multiple Claude Code
     /// installs coexist or when the binary isn't on `$PATH`),
-    /// `CLAUDE_MODEL`, and `CLAUDE_MAX_BUDGET_USD`. The remaining fields
-    /// (`timeout`, `cwd`, `bare`) always take compiled-in defaults; there
-    /// is no `CLAUDE_TIMEOUT` / `CLAUDE_CWD` / `CLAUDE_BARE` knob.
+    /// `CLAUDE_MODEL`, `CLAUDE_MAX_BUDGET_USD`, and `CLAUDE_BARE` (set
+    /// to `1` / `true` to flip the `--bare` flag on). The remaining
+    /// fields (`timeout`, `cwd`) always take compiled-in defaults.
     pub fn from_env() -> Self {
         let binary = env::var("CLAUDE_BIN")
             .ok()
@@ -99,13 +106,17 @@ impl ClaudeCodeConfig {
         let max_budget_usd = env::var("CLAUDE_MAX_BUDGET_USD")
             .ok()
             .and_then(|s| s.parse::<f64>().ok());
+        let bare = matches!(
+            env::var("CLAUDE_BARE").unwrap_or_default().as_str(),
+            "1" | "true" | "TRUE" | "yes"
+        );
         Self {
             binary,
             model,
             max_budget_usd,
             timeout: Duration::from_secs(600),
             cwd: None,
-            bare: true,
+            bare,
         }
     }
 }
@@ -426,6 +437,9 @@ mod tests {
             max_budget_usd: None,
             timeout: Duration::from_secs(5),
             cwd: None,
+            // Tests assert `--bare` is plumbed correctly; production
+            // default is `false` so OAuth/keychain auth works on a
+            // fresh laptop. See `from_env` doc-comment.
             bare: true,
         }
     }
@@ -722,21 +736,30 @@ mod tests {
 
     #[test]
     fn from_env_picks_up_overrides() {
-        // Sanity: CLAUDE_BIN / CLAUDE_MODEL / CLAUDE_MAX_BUDGET_USD all
-        // round-trip through ClaudeCodeConfig::from_env. We use
-        // std::env::set_var inside one test; the env scope is process-
-        // wide but the variables we touch aren't read elsewhere in the
-        // suite.
+        // Sanity: CLAUDE_BIN / CLAUDE_MODEL / CLAUDE_MAX_BUDGET_USD /
+        // CLAUDE_BARE all round-trip through ClaudeCodeConfig::from_env.
+        // The env touched here isn't read elsewhere in the suite.
         std::env::set_var("CLAUDE_BIN", "/usr/local/bin/claude-test");
         std::env::set_var("CLAUDE_MODEL", "sonnet");
         std::env::set_var("CLAUDE_MAX_BUDGET_USD", "0.75");
+        std::env::set_var("CLAUDE_BARE", "1");
         let cfg = ClaudeCodeConfig::from_env();
         assert_eq!(cfg.binary, PathBuf::from("/usr/local/bin/claude-test"));
         assert_eq!(cfg.model.as_deref(), Some("sonnet"));
         assert_eq!(cfg.max_budget_usd, Some(0.75));
+        assert!(cfg.bare, "CLAUDE_BARE=1 must flip bare on");
         std::env::remove_var("CLAUDE_BIN");
         std::env::remove_var("CLAUDE_MODEL");
         std::env::remove_var("CLAUDE_MAX_BUDGET_USD");
+        std::env::remove_var("CLAUDE_BARE");
+
+        // And the default is OAuth-friendly: bare=false, so a fresh
+        // laptop with subscription auth works without setting any env.
+        let cfg = ClaudeCodeConfig::from_env();
+        assert!(
+            !cfg.bare,
+            "default bare must be false to let OAuth/keychain auth work"
+        );
     }
 
     #[test]

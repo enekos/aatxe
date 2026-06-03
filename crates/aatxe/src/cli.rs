@@ -331,6 +331,10 @@ pub struct EvalsArgs {
     /// iterating on the corpus.
     #[arg(long)]
     pub no_fail: bool,
+    /// Which LLM backend to use when `--council-real-llm` is set.
+    /// Same shape as `aatxe council --backend`. Default `pi-proxy`.
+    #[arg(long, value_enum, default_value_t = BackendArg::PiProxy)]
+    pub backend: BackendArg,
 }
 
 /// `aatxe learn` — manage the learning corpus.

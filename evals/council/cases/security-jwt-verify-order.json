@@ -1,0 +1,34 @@
+{
+  "name": "security-jwt-verify-order",
+  "description": "Express/TS auth middleware PR that 'optimises' the JWT path by rate-limiting BEFORE signature verification. The rate-limit key is the unverified `sub` claim — an attacker who can forge unsigned JWTs (which is trivial: jwt.decode never checks the signature) can spam crafted tokens to (1) exhaust any user's rate-limit budget (targeted DoS / account-lockout) and (2) poison the audit log that the SIEM scrape job feeds with attacker-supplied subjects. The vulnerable interaction between middleware and rate-limiter is only visible if the reviewer reads src/utils/rate-limiter.ts and notices the audit-log side-effect.",
+  "diff": "security-jwt-verify-order.diff",
+  "filesDir": "files/security-jwt-verify-order",
+  "expected": [
+    {
+      "file": "src/middleware/jwt.ts",
+      "lineRange": [22, 39],
+      "severity": "critical",
+      "category": "security",
+      "description": "The whole decode→sub→rateLimiter.consume block (lines 22–39) acts on the UNVERIFIED `sub` claim — `jwt.decode` does not check the signature. Any attacker can craft a token with `sub=<victim>` and exhaust that user's rate-limit budget before the signature check on line 41 ever runs, locking the victim out (targeted DoS / account lockout). Fix: move the rate-limit check AFTER `jwt.verify`, keyed on the verified sub, or only rate-limit by IP at this layer.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/middleware/jwt.ts",
+      "lineRange": [35, 35],
+      "severity": "major",
+      "category": "security",
+      "description": "rateLimiter.consume writes the unverified `subject` to the `audit:rate-limit` Redis stream (see rate-limiter.ts:41–51 — 'audit-log side effect, read by SIEM'). Attacker-supplied subjects therefore land in the security audit log unchallenged, poisoning the per-user activity dashboard and any compliance reports built off it. The doc comment at the top of rate-limiter.ts explicitly warns NOT to call consume with unverified data.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/middleware/jwt.ts",
+      "lineRange": [22, 39],
+      "severity": "minor",
+      "category": "performance",
+      "description": "rate-limiter.ts performs ~6 sequential Redis round-trips (get tokens, get last, set last, xadd audit, set tokens) per call. Doing this on EVERY request — including ones that will fail the signature check anyway — multiplies the worst-case latency under attack instead of reducing it. The 'saves us under DoS' rationale in the diff comment is wrong.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 6
+}

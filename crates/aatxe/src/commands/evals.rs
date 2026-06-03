@@ -11,7 +11,8 @@
 //! 5. Optionally diff against a baseline; exit 2 on regression past
 //!    tolerance.
 
-use crate::cli::EvalsArgs;
+use crate::claude_code::{ClaudeCodeClient, ClaudeCodeConfig};
+use crate::cli::{BackendArg, EvalsArgs};
 use crate::commands::Outcome;
 use crate::pi_proxy::{PiAgentClient, PiConfig};
 use crate::stub_client::StubKimi;
@@ -61,14 +62,22 @@ pub fn execute(args: EvalsArgs) -> Result<Outcome> {
             corpus.display()
         );
         let client: Box<dyn LlmClient> = if args.council_real_llm {
-            if std::env::var("KIMI_API_KEY").is_err() {
-                return Err(anyhow!(
-                    "--council-real-llm requires KIMI_API_KEY in the environment \
-                     (the pi child uses it to reach Moonshot; drop the flag for a \
-                     stub-LLM smoke test)"
-                ));
+            match args.backend {
+                BackendArg::PiProxy => {
+                    if std::env::var("KIMI_API_KEY").is_err() {
+                        return Err(anyhow!(
+                            "--council-real-llm --backend pi-proxy requires KIMI_API_KEY \
+                             in the environment (the pi child uses it to reach Moonshot; \
+                             drop the flag for a stub-LLM smoke test, or pass \
+                             --backend claude-code to use your Claude Code subscription)"
+                        ));
+                    }
+                    Box::new(PiAgentClient::new(PiConfig::from_env()))
+                }
+                BackendArg::ClaudeCode => {
+                    Box::new(ClaudeCodeClient::new(ClaudeCodeConfig::from_env()))
+                }
             }
-            Box::new(PiAgentClient::new(PiConfig::from_env()))
         } else {
             Box::new(StubKimi)
         };
@@ -100,8 +109,19 @@ pub fn execute(args: EvalsArgs) -> Result<Outcome> {
             );
             let opts = CouncilOptions {
                 model: if args.council_real_llm {
-                    let pi_cfg = PiConfig::from_env();
-                    format!("pi+{}", pi_cfg.model)
+                    match args.backend {
+                        BackendArg::PiProxy => {
+                            let pi_cfg = PiConfig::from_env();
+                            format!("pi+{}", pi_cfg.model)
+                        }
+                        BackendArg::ClaudeCode => {
+                            let cc = ClaudeCodeConfig::from_env();
+                            cc.model
+                                .clone()
+                                .map(|m| format!("claude-code+{m}"))
+                                .unwrap_or_else(|| "claude-code".to_string())
+                        }
+                    }
                 } else {
                     "stub".into()
                 },

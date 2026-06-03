@@ -1,0 +1,24 @@
+diff --git a/src/routes/invoices.ts b/src/routes/invoices.ts
+index 1111111..2222222 100644
+--- a/src/routes/invoices.ts
++++ b/src/routes/invoices.ts
+@@ -10,15 +10,20 @@
+ // The route is auth-scoped (req.user is guaranteed non-null past the
+ // authenticate middleware above), so the underlying query can skip
+ // the tenant_id filter and return everything the user can see.
+ invoicesRouter.get("/invoices", async (req: Request, res: Response) => {
+   const status = req.query.status as
+     | "draft"
+     | "sent"
+     | "paid"
+     | "void"
+     | undefined;
+
+-  const rows = await listInvoices({ tenant_id: req.query.tenant_id as string, status, limit: 200 });
++  const rows = await listInvoices({
++    tenant_id: req.user!.tenants[0],
++    status,
++    limit: 200,
++  });
+   res.json({ rows });
+ });

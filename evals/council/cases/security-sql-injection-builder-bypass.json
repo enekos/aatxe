@@ -1,0 +1,26 @@
+{
+  "name": "security-sql-injection-builder-bypass",
+  "description": "Express/TS PR that 'optimises' a parameterised QueryBuilder.where() call to a string-interpolated whereRaw() under the rationale of avoiding a parameter bind for the LIKE pattern. The repo's QueryBuilder explicitly documents whereRaw as an escape hatch that takes NO parameters and warns 'NEVER pass through user-controllable input', with an incident reference (SEC-2024-082). The diff routes `req.query.q` directly into the raw SQL — classic SQL injection. Additionally the original code still concatenates `req.query.order` unsafely into ORDER BY (pre-existing bug, surfaces in any thorough security review of the file). The user-controllable-vs-trusted-input distinction is only visible if the reviewer reads src/db/query-builder.ts's docstring.",
+  "diff": "security-sql-injection-builder-bypass.diff",
+  "filesDir": "files/security-sql-injection-builder-bypass",
+  "expected": [
+    {
+      "file": "src/routes/search.ts",
+      "lineRange": [14, 14],
+      "severity": "critical",
+      "category": "security",
+      "description": "SQL injection: `req.query.q` is interpolated into a `whereRaw()` clause. The QueryBuilder's whereRaw method is documented as a raw-SQL passthrough with NO parameterisation, and its source-of-truth doc-comment explicitly warns 'NEVER pass through user-controllable input' (SEC-2024-082). An attacker sending `q=' OR 1=1 --` exfiltrates the entire articles table. Fix: revert to the parameterised `builder.where('title ILIKE ?', \\`%${q}%\\`)` form.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/routes/search.ts",
+      "lineRange": [20, 20],
+      "severity": "critical",
+      "category": "security",
+      "description": "SQL injection via ORDER BY: `req.query.order` is interpolated directly into the SQL string. ORDER BY cannot be parameterised, but the right defence is an allowlist of column-name strings. Pre-existing bug independent of the diff, but the whereRaw change makes this file's threat surface a clear audit target.",
+      "mustCatch": true
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 5
+}

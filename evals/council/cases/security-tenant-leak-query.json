@@ -1,0 +1,26 @@
+{
+  "name": "security-tenant-leak-query",
+  "description": "Express/TS multi-tenant invoices PR that 'simplifies' the route by picking the tenant id from `req.user.tenants[0]` instead of `req.query.tenant_id`. The auth middleware's docstring explicitly warns that `tenants` is a SET (support staff, partner-org admins, internal tooling commonly have many) and that handlers MUST resolve the requested tenant from the URL/header and CHECK it against the user's tenants — never assume one-tenant-per-user. The invoices DB layer's docstring further references INC-2025-014, a real cross-tenant data leak (4k invoices). The diff's tenants[0] picks an arbitrary tenant — for any user with N > 1 tenants, callers requesting their OTHER tenants get the wrong data; worse, support staff with N tenants get whichever happens to be first in the list. The bug requires reading at least src/middleware/auth.ts and src/db/invoices.ts to recognise the violated invariant.",
+  "diff": "security-tenant-leak-query.diff",
+  "filesDir": "files/security-tenant-leak-query",
+  "expected": [
+    {
+      "file": "src/routes/invoices.ts",
+      "lineRange": [22, 22],
+      "severity": "critical",
+      "category": "security",
+      "description": "Tenant-scoping bug: `req.user!.tenants[0]` silently picks an arbitrary tenant from a user's set instead of resolving the requested tenant. Per src/middleware/auth.ts:6–13 the `tenants` field is a SET (multi-tenant users are normal — support staff, partner-org admins, internal tooling) and handlers MUST take the tenant id from the request and CHECK it against the user's set. The pre-PR `req.query.tenant_id` was the right shape — the diff should keep that and add an explicit `if (!req.user.tenants.includes(tenant_id)) return 403`. The DB layer (src/db/invoices.ts:5–8) also points at INC-2025-014, the cross-tenant leak that motivated the per-tenant-scoping invariant.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/routes/invoices.ts",
+      "lineRange": [12, 12],
+      "severity": "major",
+      "category": "security",
+      "description": "The diff's rationale comment ('the route is auth-scoped so the underlying query can skip the tenant_id filter') is wrong on its face: `listInvoices` still requires `tenant_id` (see src/db/invoices.ts:18 — `WHERE tenant_id = $1`), and the auth middleware only guarantees the user exists, not which tenant they're acting on. The comment should be removed and a `// tenant scope CHECK is enforced below` line added immediately before the includes-check.",
+      "mustCatch": false
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 4
+}

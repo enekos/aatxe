@@ -1,0 +1,21 @@
+diff --git a/src/routes/search.ts b/src/routes/search.ts
+index 1111111..2222222 100644
+--- a/src/routes/search.ts
++++ b/src/routes/search.ts
+@@ -7,15 +7,18 @@
+ // GET /search?q=…&order=…
+ searchRouter.get("/search", async (req: Request, res: Response) => {
+   const q = String(req.query.q ?? "");
+   const order = String(req.query.order ?? "created_at DESC");
+
+   const builder = new QueryBuilder();
+   if (q) {
+-    builder.where("title ILIKE ?", `%${q}%`);
++    builder.whereRaw(`title ILIKE '%${q}%'`);
+   }
+
+   const { sql, binds } = builder.build();
+   const rows = await db.query(
+     `SELECT id, title, created_at FROM articles ${sql} ORDER BY ${order} LIMIT 50`,
+     binds,
+   );

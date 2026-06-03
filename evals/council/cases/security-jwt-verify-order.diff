@@ -1,0 +1,38 @@
+diff --git a/src/middleware/jwt.ts b/src/middleware/jwt.ts
+index 1111111..2222222 100644
+--- a/src/middleware/jwt.ts
++++ b/src/middleware/jwt.ts
+@@ -6,6 +6,7 @@
+ import type { Request, Response, NextFunction } from "express";
+ import jwt from "jsonwebtoken";
+ import { JWT_SECRET } from "../config/env";
++import { rateLimiter } from "../utils/rate-limiter";
+
+ export async function authenticate(
+   req: Request,
+@@ -19,6 +20,25 @@
+   }
+   const token = header.slice(7);
+
++  // Decode (without verifying) so we can rate-limit *before* we burn
++  // CPU on the crypto check. Saves us under DoS, and the verify a few
++  // lines down catches any forged tokens anyway.
++  const decoded = jwt.decode(token);
++  if (
++    !decoded ||
++    typeof decoded !== "object" ||
++    typeof decoded.sub !== "string"
++  ) {
++    res.status(401).json({ error: "malformed token" });
++    return;
++  }
++
++  const allowed = await rateLimiter.consume(decoded.sub, req.ip ?? "");
++  if (!allowed) {
++    res.status(429).json({ error: "rate limited" });
++    return;
++  }
++
+   try {
+     const verified = jwt.verify(token, JWT_SECRET, {
+       algorithms: ["HS256"],

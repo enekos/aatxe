@@ -1,0 +1,23 @@
+diff --git a/src/handlers/checkout.ts b/src/handlers/checkout.ts
+index 1111111..2222222 100644
+--- a/src/handlers/checkout.ts
++++ b/src/handlers/checkout.ts
+@@ -17,9 +17,14 @@
+     currency: "EUR",
+     customer_id: customerId,
+   };
+
+-  await payments.charge(chargeReq);
++  // Charge the customer. If the payment provider has a hiccup we
++  // don't want to block the response — log and move on.
++  try {
++    await payments.charge(chargeReq);
++  } catch (err) {
++    // eslint-disable-next-line no-console
++    console.error("payments.charge failed", err);
++  }
+
+   await markOrderPaid(orderId);
+   await markOrderShipped(orderId);
+
+   res.json({ ok: true, order_id: orderId });

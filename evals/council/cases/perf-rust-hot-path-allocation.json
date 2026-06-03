@@ -1,0 +1,26 @@
+{
+  "name": "perf-rust-hot-path-allocation",
+  "description": "Rust hot-path PR that switches `route_limits` from the zero-alloc `cache.get(tenant.id, &req.route)` form to a per-iteration `format!()` + `cache.get_owned(&key)`. The function's own docstring (lines 1–18) explicitly flags it as a hot path called 30k times in tight loops for the admin-aggregator and quotes a 4× p99 regression from a prior identical alloc-per-iter PR. The convention comment names the exact API to use (`get(&str)` zero-alloc) and the API to avoid in handlers (`get_owned`). The bug requires the reviewer to read the docstring rationale AND src/cache.rs to see that get/get_owned are intentionally distinct.",
+  "diff": "perf-rust-hot-path-allocation.diff",
+  "filesDir": "files/perf-rust-hot-path-allocation",
+  "expected": [
+    {
+      "file": "src/handlers/lookup.rs",
+      "lineRange": [21, 22],
+      "severity": "major",
+      "category": "performance",
+      "description": "Per-iteration allocation in a documented hot path: `format!()` builds a fresh `String` on every loop iteration, exactly the pattern the function's docstring (lines 6–14) flags as a 4× p99 regression in a prior incident. With 30k iterations for the admin-aggregator that's 30k transient heap allocations per request. Fix: revert to `cache.get(tenant.id, &req.route)` (the zero-alloc API documented on src/cache.rs:7–8) — composite key construction belongs inside the cache implementation, not in callers.",
+      "mustCatch": true
+    },
+    {
+      "file": "src/handlers/lookup.rs",
+      "lineRange": [22, 22],
+      "severity": "minor",
+      "category": "maintainability",
+      "description": "`cache.get_owned(&key)` is called from `src/handlers/lookup.rs`, but `src/cache.rs:8–11` explicitly says 'Do NOT call from anything in src/handlers/'. The diff violates the documented module-layering invariant — either the doc comment needs updating to match new reality OR (the right answer) the call should use the zero-alloc API.",
+      "mustCatch": true
+    }
+  ],
+  "forbidden": [],
+  "maxFindings": 4
+}
