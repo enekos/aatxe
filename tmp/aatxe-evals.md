@@ -1,21 +1,21 @@
 <!-- aatxe:evals -->
-## aatxe evals — 2026-06-02T10:46:38.810018000Z (0.1.0)
+## aatxe evals — 2026-06-03T10:41:03.642159000Z (0.1.0)
 
 Council LLM: _stub (deterministic)_
 
-### Council quality (15 cases)
+### Council quality (24 cases)
 
 | metric | value |
 |---|---|
-| Cases fully recalled | 6/15 |
-| Cases over `maxFindings` cap | 2 |
+| Cases fully recalled | 6/24 |
+| Cases over `maxFindings` cap | 6 |
 | Cases with judge error | 0 |
-| Critical recall | 0.143 |
+| Critical recall | 0.062 |
 | Critical precision | 1.000 |
-| Critical F1 | 0.250 |
+| Critical F1 | 0.118 |
 | Severity calibration MAE | 0.000 (0=perfect, 3=max) |
-| Judge Brier score | 0.515 (0=perfect, 0.25=chance) |
-| False positives per case | 4.400 |
+| Judge Brier score | 0.526 (0=perfect, 0.25=chance) |
+| False positives per case | 4.625 |
 | Forbidden-path findings | 0 |
 | Avg latency | 0 ms |
 | Tokens (prompt/completion) | 0 / 0 |
@@ -39,6 +39,15 @@ Council LLM: _stub (deterministic)_
 | `perf-django-export-n-plus-one` | 0/5 | 5 | 0 | — | 0.543 |
 | `security-authz-idor-export-route` | 0/3 | 5 | 0 | — | 0.543 |
 | `maintainability-rust-reinvents-counters` | 0/3 | 5 | 0 | — | 0.543 |
+| `security-jwt-verify-order` | 0/2 | 5 | 0 | — | 0.543 |
+| `correctness-rust-async-cancel-unsafe` | 0/3 | 5 | 0 | — | 0.543 |
+| `correctness-go-context-cleanup-goroutine` | 0/2 | 5 | 0 | — | 0.543 |
+| `security-sql-injection-builder-bypass` | 0/2 | 5 | 0 | — | 0.543 |
+| `correctness-rust-deadlock-lock-ordering` | 0/1 | 5 | 0 | yes | 0.543 |
+| `correctness-go-channel-leak-no-close` | 0/2 | 5 | 0 | — | 0.543 |
+| `security-tenant-leak-query` | 0/1 | 5 | 0 | yes | 0.543 |
+| `perf-rust-hot-path-allocation` | 0/2 | 5 | 0 | yes | 0.543 |
+| `correctness-ts-async-error-swallow` | 0/1 | 5 | 0 | yes | 0.543 |
 </details>
 
 ### Stats engine (6 scenarios, 6 passed)
