@@ -16,6 +16,12 @@ export interface BenchOptions<T = void> {
   iterations?: number
   integration?: boolean
   skip?: boolean
+  /**
+   * When set on at least one bench in a run, the runner skips every bench
+   * not marked `only: true`. Mirrors vitest/jest semantics — useful for
+   * locally iterating on a single flaky bench without commenting out the rest.
+   */
+  only?: boolean
 }
 
 export interface ResolvedBenchOptions {
@@ -28,6 +34,7 @@ export interface ResolvedBenchOptions {
   gc: boolean
   integration: boolean
   skip: boolean
+  only: boolean
   setup: (() => unknown | Promise<unknown>) | null
   teardown: ((fixture: unknown) => void | Promise<void>) | null
 }
@@ -39,6 +46,20 @@ export interface RegisteredBench {
   file: string
   options: ResolvedBenchOptions
   fn: BenchFn<unknown>
+}
+
+/**
+ * A non-time metric attached to a {@link BenchRun}. See `Metric` in
+ * `aatxe-core::types` for the canonical contract.
+ *
+ * Adding metrics does **not** bump the schema version — they're a forward-
+ * compatible extension point for throughput, allocations, custom counters.
+ */
+export interface Metric {
+  name: string
+  value: number
+  unit: string
+  lowerIsBetter?: boolean
 }
 
 export interface BenchRun {
@@ -60,6 +81,10 @@ export interface BenchRun {
   p50: number
   p95: number
   p99: number
+  /** Optional non-time metrics. Serialised only when non-empty. */
+  metrics?: Metric[]
+  /** Optional free-form tags for filtering / grouping. */
+  tags?: string[]
 }
 
 export interface AffectedScope {

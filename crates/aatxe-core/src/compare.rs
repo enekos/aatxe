@@ -173,6 +173,8 @@ fn normalize(r: &BenchRun) -> BenchRun {
         p50: s.p50,
         p95: s.p95,
         p99: s.p99,
+        metrics: r.metrics.clone(),
+        tags: r.tags.clone(),
     }
 }
 

@@ -29,6 +29,8 @@ fn run(name: &str) -> BenchRun {
         p50: 124.5,
         p95: 146.0,
         p99: 148.0,
+        metrics: Vec::new(),
+        tags: Vec::new(),
     }
 }
 
