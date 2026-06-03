@@ -14,6 +14,11 @@ bench('parse: cold path', async () => {
 }, { warmup: 2, minIterations: 10, timeBudgetMs: 5000 })
 ```
 
+**Async benches must use `async () => { ... }` syntax** so the runner can
+route them to the async hot loop. A sync-shaped function that returns a
+Promise (e.g. `() => fetch(...)`) will be timed as sync, producing
+nonsense — wrap it: `async () => fetch(...)`.
+
 Run them locally:
 
 ```bash

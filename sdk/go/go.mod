@@ -1,3 +1,3 @@
-module github.com/enekosarasola/aatxe/sdk/go
+module github.com/enekos/aatxe/sdk/go
 
 go 1.22

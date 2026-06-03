@@ -5,7 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://github.com/enekos/aatxe"
+documentation = "https://docs.rs/aatxe-core"
 description = "Core types, statistics, and comparison logic for aatxe. No IO."
+readme = "README.md"
+keywords = ["benchmark", "performance", "regression", "statistics", "ci"]
+categories = ["development-tools::profiling", "development-tools::testing"]
 
 [lib]
 path = "src/lib.rs"

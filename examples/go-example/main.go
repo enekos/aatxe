@@ -12,7 +12,7 @@ package main
 import (
 	"strings"
 
-	aatxe "github.com/enekosarasola/aatxe/sdk/go"
+	aatxe "github.com/enekos/aatxe/sdk/go"
 )
 
 func main() {

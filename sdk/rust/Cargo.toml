@@ -5,13 +5,20 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://github.com/enekos/aatxe"
+documentation = "https://docs.rs/aatxe-bench"
 description = "Authoring API + JSON emitter for aatxe-compatible Rust benchmarks"
+readme = "README.md"
+keywords = ["benchmark", "microbenchmark", "performance", "regression", "ci"]
+categories = ["development-tools::profiling", "development-tools::testing"]
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
-aatxe-core = { path = "../../crates/aatxe-core" }
+# Dual `path` + `version` so the workspace build resolves locally while
+# `cargo publish` to crates.io resolves the released aatxe-core.
+aatxe-core = { path = "../../crates/aatxe-core", version = "0.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 time = { workspace = true }
