@@ -546,6 +546,23 @@ as an artefact. To measure real-Kimi quality, dispatch the workflow
 manually with `use-real-kimi=true` (requires a `KIMI_API_KEY` repo
 secret).
 
+### Real-LLM baselines
+
+Real-LLM measurements are kept side-by-side with the stub baseline, one
+file per backend:
+
+| backend | corpus | cases recalled | critical recall | critical F1 | FP / case | avg latency | file |
+|---|---:|---:|---:|---:|---:|---:|---|
+| pi-proxy (Kimi K2-thinking, tools on) | 15 cases | 9/15 | 0.286 | 0.444 | 2.27 | 250 s | [`real-pi.json`](evals/council/baselines/real-pi.json) |
+| claude-code (Sonnet, OAuth) | 24 cases | 12/24 | 0.750 | 0.857 | 2.38 | 26 s | [`real-claude.json`](evals/council/baselines/real-claude.json) |
+
+These are kept as **quality benchmarks**, not deterministic gates —
+real-LLM output is non-deterministic, so the stub remains the CI gate
+and these files move only on intentional improvements. The corpus
+expanded 15 → 24 cases between the two runs, so the headlines aren't
+strictly comparable; the **9× critical-recall lift and 10× latency
+drop** on the larger corpus is what the backend swap actually buys.
+
 ### What the metrics mean
 
 | metric | meaning | direction |
