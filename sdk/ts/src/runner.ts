@@ -46,8 +46,13 @@ for (const file of files) {
 _internal.setCurrentFile(null)
 
 const allRuns: BenchRun[] = []
-for (const b of _internal.list()) {
+const registry = _internal.list()
+// `only`: if any bench is marked only, skip everything else. Mirrors
+// vitest/jest semantics — diagnostic mode for a single flaky bench.
+const onlyMode = registry.some(b => b.options.only)
+for (const b of registry) {
   if (b.options.skip) continue
+  if (onlyMode && !b.options.only) continue
   if (filter && !filter.test(b.name)) continue
   allRuns.push(await runOne(b))
 }

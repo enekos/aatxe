@@ -20,7 +20,7 @@
 import { summarizeSamples } from './stats.js'
 import type { BenchFn, BenchOptions, RegisteredBench, ResolvedBenchOptions } from './types.js'
 
-export type { BenchFn, BenchOptions, BenchRun, RunReport } from './types.js'
+export type { BenchFn, BenchOptions, BenchRun, Metric, RunReport } from './types.js'
 export { summarizeSamples } from './stats.js'
 
 /**
@@ -53,6 +53,7 @@ const DEFAULTS: ResolvedBenchOptions = {
   gc: false,
   integration: false,
   skip: false,
+  only: false,
   setup: null,
   teardown: null,
 }
@@ -106,6 +107,7 @@ function resolveOptions<T>(opts: BenchOptions<T>): ResolvedBenchOptions {
     ...(opts.gc != null ? { gc: opts.gc } : {}),
     ...(opts.integration != null ? { integration: opts.integration } : {}),
     ...(opts.skip != null ? { skip: opts.skip } : {}),
+    ...(opts.only != null ? { only: opts.only } : {}),
     ...(opts.setup != null ? { setup: opts.setup as () => unknown } : {}),
     ...(opts.teardown != null ? { teardown: opts.teardown as (f: unknown) => void } : {}),
   }

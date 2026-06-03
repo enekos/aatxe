@@ -60,6 +60,33 @@ impl Language {
     }
 }
 
+/// A non-time metric attached to a [`BenchRun`].
+///
+/// The base statistics (mean, median, p95, …) describe **time per
+/// operation** — the universally-supported axis the comparator gates on
+/// today. `Metric` is the optional extension point for everything else a
+/// bench might want to report: throughput in bytes-per-second, allocation
+/// counts, peak heap, custom domain metrics.
+///
+/// Adding a metric does **not** bump the schema version. Consumers that
+/// don't know about it ignore it; the regression gate continues to operate
+/// on the primary time-per-op signal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Metric {
+    /// Human-readable name, e.g. `"throughput"`, `"allocations"`, `"peak_heap"`.
+    pub name: String,
+    /// Numeric value in the units declared by [`Self::unit`].
+    pub value: f64,
+    /// SI-style unit string, e.g. `"bytes/s"`, `"allocs/op"`, `"bytes"`.
+    pub unit: String,
+    /// When `Some(false)` a *higher* value is the improvement direction
+    /// (e.g. throughput). When `Some(true)` or `None` the comparator
+    /// treats lower as better (matching the time-per-op default).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub lower_is_better: Option<bool>,
+}
+
 /// Statistics computed for a single benchmark run. All time values are in
 /// nanoseconds.
 ///
@@ -96,6 +123,15 @@ pub struct BenchRun {
     pub p50: f64,
     pub p95: f64,
     pub p99: f64,
+    /// Optional non-time metrics (throughput, allocations, custom). See
+    /// [`Metric`]. Omitted from JSON when empty so v0.1 reports stay
+    /// byte-identical to the pre-extension shape.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub metrics: Vec<Metric>,
+    /// Optional free-form tags for filtering / grouping in the comparator
+    /// (e.g. `["core", "hot-path"]`). Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tags: Vec<String>,
 }
 
 /// Marker present on head reports produced by `aatxe run --affected`.

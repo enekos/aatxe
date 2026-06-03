@@ -448,6 +448,8 @@ fn mk_run_report(
             p50: 0.0,
             p95: 0.0,
             p99: 0.0,
+            metrics: Vec::new(),
+            tags: Vec::new(),
         }],
         affected_scope: None,
     }
