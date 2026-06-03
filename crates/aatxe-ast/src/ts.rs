@@ -43,8 +43,18 @@ impl LanguageDescriber for TsDescriber {
 
         let mut symbols: Vec<LogicSymbol> = Vec::new();
         let mut imports: Vec<String> = Vec::new();
+        let mut file_edges: Vec<String> = Vec::new();
 
-        walk(root, bytes, source, &mut symbols, &mut imports, None, false);
+        walk(
+            root,
+            bytes,
+            source,
+            &mut symbols,
+            &mut imports,
+            &mut file_edges,
+            None,
+            false,
+        );
 
         let edges = call_edges(&symbols, source);
 
@@ -54,27 +64,48 @@ impl LanguageDescriber for TsDescriber {
             symbols,
             edges,
             imports,
+            file_edges,
             symbol_descriptions: HashMap::new(),
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     node: Node,
     bytes: &[u8],
     source: &str,
     out: &mut Vec<LogicSymbol>,
     imports: &mut Vec<String>,
+    file_edges: &mut Vec<String>,
     class_owner: Option<&str>,
     in_export: bool,
 ) {
     let kind = node.kind();
     match kind {
         "export_statement" => {
+            // `export { x } from "./y"` and `export * from "./y"` are
+            // re-exports — they add a file edge in the same shape as a
+            // bare import. Capture the source string here; the diff-walk
+            // would miss it because the regex extractor *does* catch this
+            // shape today and parity matters for #7a.
+            if let Some(src) = field_text(node, "source", bytes) {
+                push_edge(file_edges, src);
+                push_edge(imports, src);
+            }
             // Recurse with `in_export=true`. Children of an export
             // statement inherit the export marker for `exported`.
             for child in named_children(node) {
-                walk(child, bytes, source, out, imports, class_owner, true);
+                walk(
+                    child,
+                    bytes,
+                    source,
+                    out,
+                    imports,
+                    file_edges,
+                    class_owner,
+                    true,
+                );
             }
             return;
         }
@@ -111,7 +142,16 @@ fn walk(
                 // attribute correctly. Don't fall through.
                 if let Some(body) = node.child_by_field_name("body") {
                     for child in named_children(body) {
-                        walk(child, bytes, source, out, imports, Some(&owner), false);
+                        walk(
+                            child,
+                            bytes,
+                            source,
+                            out,
+                            imports,
+                            file_edges,
+                            Some(&owner),
+                            false,
+                        );
                     }
                 }
                 return;
@@ -167,15 +207,23 @@ fn walk(
                     val.kind(),
                     "arrow_function" | "function" | "function_expression"
                 );
-                let kind = if is_callable {
-                    SymbolKind::Function
-                } else {
-                    SymbolKind::Variable
-                };
-                // Skip non-callable vars at non-top-level — they're noise.
+                // For non-callable initializers, capture file edges from
+                // any embedded dynamic `import("…")` / `require("…")`
+                // calls before continuing. The original walker returns
+                // early at the end of this branch and never visits the
+                // value subtree, so without this pass `const m =
+                // require("./m")` would never reach the call_expression
+                // branch below.
                 if !is_callable {
+                    if val.kind() == "call_expression" {
+                        if let Some(src) = dynamic_import_or_require_arg(val, bytes) {
+                            push_edge(imports, &src);
+                            push_edge(file_edges, &src);
+                        }
+                    }
                     continue;
                 }
+                let kind = SymbolKind::Function;
                 out.push(LogicSymbol {
                     id: format!("{}:{}", kind.tag(), name),
                     name: name.to_string(),
@@ -191,15 +239,18 @@ fn walk(
         }
         "import_statement" => {
             if let Some(src) = field_text(node, "source", bytes) {
-                let trimmed = src.trim().trim_start_matches('"').trim_end_matches('"');
-                let trimmed = trimmed.trim_start_matches('\'').trim_end_matches('\'');
-                if !trimmed.is_empty() && !imports.iter().any(|s| s == trimmed) {
-                    imports.push(trimmed.to_string());
-                }
+                push_edge(imports, src);
+                push_edge(file_edges, src);
             }
             return;
         }
         "call_expression" => {
+            // Dynamic `import("./x")` and CJS `require("./x")` — same
+            // file-edge shape as a static `import_statement`.
+            if let Some(src) = dynamic_import_or_require_arg(node, bytes) {
+                push_edge(imports, &src);
+                push_edge(file_edges, &src);
+            }
             // Capture inline arrow/function callbacks passed to
             // Router-style method calls — Express, Koa, Fastify, etc.
             // Without this branch, an
@@ -247,7 +298,66 @@ fn walk(
         _ => {}
     }
     for child in named_children(node) {
-        walk(child, bytes, source, out, imports, class_owner, in_export);
+        walk(
+            child,
+            bytes,
+            source,
+            out,
+            imports,
+            file_edges,
+            class_owner,
+            in_export,
+        );
+    }
+}
+
+/// Push the unquoted form of `raw` into `dst` if not empty and not a dup.
+/// Shared by `import_statement`, `export_statement[source]`, and
+/// dynamic-import/require capture so they all normalise quotes the same way.
+fn push_edge(dst: &mut Vec<String>, raw: &str) {
+    let trimmed = raw
+        .trim()
+        .trim_start_matches('"')
+        .trim_end_matches('"')
+        .trim_start_matches('\'')
+        .trim_end_matches('\'')
+        .trim_start_matches('`')
+        .trim_end_matches('`');
+    if trimmed.is_empty() || dst.iter().any(|s| s == trimmed) {
+        return;
+    }
+    dst.push(trimmed.to_string());
+}
+
+/// If `node` is `import("…")` or `require("…")`, return the unquoted
+/// argument. Returns None otherwise — including for any non-string-literal
+/// argument (which the regex extractor would have missed anyway).
+///
+/// tree-sitter-typescript parses `require(...)` as a normal
+/// `call_expression` whose `function` is an `identifier`, but
+/// `import(...)` is special — the function position is a bare `import`
+/// keyword node, not an identifier. Accept both shapes.
+fn dynamic_import_or_require_arg(node: Node, bytes: &[u8]) -> Option<String> {
+    let func = node.child_by_field_name("function")?;
+    let kind = func.kind();
+    let text = func.utf8_text(bytes).ok().unwrap_or("");
+    let matches = kind == "import" || text == "import" || text == "require";
+    if !matches {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    let first = named_children(args).into_iter().next()?;
+    if first.kind() != "string" {
+        return None;
+    }
+    let raw = first.utf8_text(bytes).ok()?;
+    let trimmed = raw
+        .trim()
+        .trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -506,6 +616,48 @@ mod tests {
         for want in ["./util", "pkg", "side-effect"] {
             assert!(g.imports.iter().any(|s| s == want), "missing {want}");
         }
+    }
+
+    #[test]
+    fn file_edges_cover_every_static_and_dynamic_import_shape() {
+        // Parity with `aatxe-core::affected::extract_specifiers`'s TS
+        // regex pass — same shapes, language-correct. Includes the
+        // re-export and dynamic-import shapes that the regex caught but
+        // the bare AST `import_statement` walk missed before #7a.
+        let g = describe(
+            "\
+import { a } from './a';
+import './b';
+import * as y from './y.ts';
+export { z } from '../z';
+export * from './star';
+const m = require('./m');
+const d = import('./d');
+",
+        );
+        for want in ["./a", "./b", "./y.ts", "../z", "./star", "./m", "./d"] {
+            assert!(
+                g.file_edges.iter().any(|s| s == want),
+                "missing {want} in file_edges {:?}",
+                g.file_edges
+            );
+        }
+    }
+
+    #[test]
+    fn file_edges_skip_imports_inside_string_literals() {
+        // The pure-regex extractor stripped // and /* */ comments, but
+        // had no way to tell whether a `from "./x"` substring lived
+        // inside a string literal. Tree-sitter does — verify the AST
+        // pass drops the noise.
+        let g =
+            describe("const lie = `import { x } from './fake'`;\nimport { y } from './real';\n");
+        assert!(g.file_edges.iter().any(|s| s == "./real"));
+        assert!(
+            !g.file_edges.iter().any(|s| s == "./fake"),
+            "got: {:?}",
+            g.file_edges
+        );
     }
 
     #[test]

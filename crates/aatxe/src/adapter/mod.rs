@@ -13,6 +13,7 @@
 //! All three normalise the output through [`aatxe_core::stats::summarize_samples`]
 //! so downstream consumers see identical statistics regardless of language.
 
+use crate::ast_import_extractor::AstImportExtractor;
 use aatxe_core::affected::{resolve_affected, AffectedOptions};
 use aatxe_core::types::{AffectedScope as CoreScope, Language, RunReport};
 use anyhow::{Context, Result};
@@ -55,6 +56,7 @@ pub fn resolve_affected_scope(
 ) -> Result<CoreScope> {
     let fs = real_fs::RealFs;
     let git = real_fs::RealGit;
+    let extractor = AstImportExtractor;
     let set = resolve_affected(&AffectedOptions {
         cwd: cwd.to_path_buf(),
         base: base.to_string(),
@@ -63,6 +65,7 @@ pub fn resolve_affected_scope(
         extra_changed_files: vec![],
         git: &git,
         fs: &fs,
+        import_extractor: Some(&extractor),
     })
     .context("resolving --affected set")?;
 

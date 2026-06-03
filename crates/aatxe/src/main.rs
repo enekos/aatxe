@@ -6,6 +6,7 @@
 //! * `2` — regressions detected and `--fail-on-regression` was passed.
 
 mod adapter;
+mod ast_import_extractor;
 mod ast_scope;
 mod claude_code;
 mod cli;

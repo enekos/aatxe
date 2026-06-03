@@ -1,5 +1,5 @@
 <!-- aatxe:evals -->
-## aatxe evals — 2026-06-03T10:41:03.642159000Z (0.1.0)
+## aatxe evals — 2026-06-03T14:44:17.908481000Z (0.1.0)
 
 Council LLM: _stub (deterministic)_
 
