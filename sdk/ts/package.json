@@ -6,14 +6,44 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
   "bin": {
     "aatxe-ts-runner": "dist/runner.js"
   },
   "files": [
     "dist",
     "src",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "homepage": "https://github.com/enekos/aatxe#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/enekos/aatxe.git",
+    "directory": "sdk/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/enekos/aatxe/issues"
+  },
+  "keywords": [
+    "benchmark",
+    "microbenchmark",
+    "performance",
+    "regression",
+    "statistics",
+    "ci",
+    "aatxe"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test --import tsx 'src/**/*.test.ts'",
