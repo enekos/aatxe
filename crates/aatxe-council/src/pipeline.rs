@@ -12,6 +12,7 @@ use crate::diff::{
     attach_file_contexts, chunk_for_review_with_related_owned, filter_ignored, parse_unified_diff,
     ChunkPolicy, RelatedFile, DEFAULT_IGNORED_PATTERNS,
 };
+use crate::events::{CouncilEvent, EventSink, NullSink};
 use crate::llm::LlmClient;
 use crate::parse::{parse_findings_json, parse_judge_verdicts};
 use crate::persona::Persona;
@@ -20,6 +21,7 @@ use crate::synth::{dedup_and_rank, SynthOptions};
 use crate::types::{AgentReview, CouncilReport, Finding, JudgeVerdict, JudgedFinding, Severity};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -60,6 +62,15 @@ pub struct CouncilOptions {
     /// short-circuits the section and is byte-identical to the
     /// pre-scope baseline.
     pub ast_scope: String,
+    /// Sink for streaming pipeline events. Defaults to [`NullSink`] so
+    /// existing callers see byte-identical behaviour. The CLI's
+    /// `--json-events` flag wires a JSON-Lines writer here; the
+    /// interactive curator wires its own subscriber.
+    ///
+    /// Stored as [`Arc`] because the proposer threads borrow it via
+    /// `std::thread::scope`; using `Arc` keeps the ownership story
+    /// simple even though scoped threads could borrow a `&dyn`.
+    pub event_sink: Arc<dyn EventSink>,
 }
 
 impl Default for CouncilOptions {
@@ -75,6 +86,7 @@ impl Default for CouncilOptions {
             personas: Persona::ALL.to_vec(),
             learned_guidance: String::new(),
             ast_scope: String::new(),
+            event_sink: Arc::new(NullSink),
         }
     }
 }
@@ -146,6 +158,15 @@ pub fn run_council_with_files(
     related.sort_by(|a, b| a.path.cmp(&b.path));
     let chunks = chunk_for_review_with_related_owned(kept, &related, opts.chunk_policy);
 
+    opts.event_sink.emit(&CouncilEvent::Start {
+        repo: opts.repo.clone(),
+        pr: opts.pr,
+        model: opts.model.clone(),
+        files_total,
+        files_reviewed,
+        n_chunks: chunks.len() as u32,
+    });
+
     // 2. Proposer calls — parallel across personas, sequential across
     //    chunks. A per-persona LLM failure is captured into the agent
     //    review's `error` field and the council keeps going. The only
@@ -154,7 +175,7 @@ pub fn run_council_with_files(
     let mut proposer_reviews: Vec<AgentReview> = Vec::new();
     let mut all_findings: Vec<Finding> = Vec::new();
 
-    for chunk in chunks.iter() {
+    for (chunk_idx, chunk) in chunks.iter().enumerate() {
         let reviews = run_proposers_parallel(
             client,
             &opts.personas,
@@ -162,6 +183,8 @@ pub fn run_council_with_files(
             chunk,
             &opts.learned_guidance,
             &opts.ast_scope,
+            opts.event_sink.as_ref(),
+            chunk_idx as u32,
         );
         for r in reviews {
             all_findings.extend(r.findings.iter().cloned());
@@ -170,11 +193,21 @@ pub fn run_council_with_files(
     }
 
     // 3. Synthesise (pure).
+    let n_raw = all_findings.len() as u32;
     let synthesized = dedup_and_rank(all_findings, opts.synth);
+    opts.event_sink.emit(&CouncilEvent::SynthesizeDone {
+        n_raw,
+        n_deduped: synthesized.len() as u32,
+    });
 
     // 4. Judge pass — single call over the full deduped candidate list.
-    let (judged, judge_error) =
-        run_judge(client, &opts.model, &synthesized, &opts.learned_guidance);
+    let (judged, judge_error) = run_judge(
+        client,
+        &opts.model,
+        &synthesized,
+        &opts.learned_guidance,
+        opts.event_sink.as_ref(),
+    );
 
     // 5. Accounting.
     let total_prompt_tokens: u32 = proposer_reviews
@@ -187,7 +220,7 @@ pub fn run_council_with_files(
         .sum();
 
     let total_duration_ms = t_total.elapsed().as_millis() as u64;
-    Ok(CouncilReport {
+    let report = CouncilReport {
         model: opts.model.clone(),
         repo: opts.repo.clone(),
         pr: opts.pr,
@@ -201,13 +234,47 @@ pub fn run_council_with_files(
         total_prompt_tokens,
         total_completion_tokens,
         judge_error,
-    })
+    };
+
+    // Per-finding events — one for every shippable judged finding, in
+    // the same severity-then-category order the rendered markdown
+    // uses. Lets a streaming consumer (TUI, interactive curator)
+    // render findings as the pipeline computes them, not after the
+    // whole report serialises to disk.
+    for (i, jf) in report.shippable().iter().enumerate() {
+        opts.event_sink.emit(&CouncilEvent::FindingEmitted {
+            index: i as u32,
+            file: jf.finding.file.clone(),
+            line: jf.finding.line,
+            severity: jf.finding.severity,
+            category: jf.finding.category.label().to_string(),
+            title: jf.finding.title.clone(),
+            confidence: jf.confidence,
+        });
+    }
+
+    let shippable_count = report.shippable().len() as u32;
+    let critical_count = report
+        .shippable()
+        .iter()
+        .filter(|jf| jf.finding.severity == Severity::Critical)
+        .count() as u32;
+    opts.event_sink.emit(&CouncilEvent::Done {
+        total_duration_ms,
+        shippable_count,
+        critical_count,
+        total_prompt_tokens,
+        total_completion_tokens,
+    });
+
+    Ok(report)
 }
 
 /// Run every persona on this chunk in parallel via `std::thread::scope`.
 /// **Never returns Err** — per-persona failures are captured into the
 /// returned [`AgentReview`]'s `error` field so the council degrades
 /// gracefully when one model call dies on a rate limit.
+#[allow(clippy::too_many_arguments)]
 fn run_proposers_parallel(
     client: &dyn LlmClient,
     personas: &[Persona],
@@ -215,6 +282,8 @@ fn run_proposers_parallel(
     chunk: &crate::diff::DiffChunk,
     learned_guidance: &str,
     ast_scope: &str,
+    event_sink: &dyn EventSink,
+    chunk_idx: u32,
 ) -> Vec<AgentReview> {
     use std::sync::Mutex;
     let results: Mutex<Vec<(usize, AgentReview)>> = Mutex::new(Vec::with_capacity(personas.len()));
@@ -223,6 +292,10 @@ fn run_proposers_parallel(
         for (i, &persona) in personas.iter().enumerate() {
             let results = &results;
             s.spawn(move || {
+                event_sink.emit(&CouncilEvent::ProposerStart {
+                    persona: persona.label().to_string(),
+                    chunk_idx,
+                });
                 let t0 = Instant::now();
                 let req =
                     build_proposer_request(model, persona, chunk, learned_guidance, ast_scope);
@@ -249,6 +322,15 @@ fn run_proposers_parallel(
                         completion_tokens: None,
                     },
                 };
+                event_sink.emit(&CouncilEvent::ProposerDone {
+                    persona: review.agent.clone(),
+                    chunk_idx,
+                    findings_count: review.findings.len() as u32,
+                    duration_ms: review.duration_ms.unwrap_or(0),
+                    error: review.error.clone(),
+                    prompt_tokens: review.prompt_tokens,
+                    completion_tokens: review.completion_tokens,
+                });
                 results.lock().expect("poisoned").push((i, review));
             });
         }
@@ -269,10 +351,15 @@ fn run_judge(
     model: &str,
     candidates: &[Finding],
     learned_guidance: &str,
+    event_sink: &dyn EventSink,
 ) -> (Vec<JudgedFinding>, Option<String>) {
     if candidates.is_empty() {
         return (Vec::new(), None);
     }
+    event_sink.emit(&CouncilEvent::JudgeStart {
+        n_candidates: candidates.len() as u32,
+    });
+    let t0 = Instant::now();
     let req = build_judge_request(model, candidates, learned_guidance);
     let (verdicts, err) = match client.chat(req) {
         Ok(resp) => (parse_judge_verdicts(&resp.content, candidates.len()), None),
@@ -281,10 +368,19 @@ fn run_judge(
             (fallback, Some(format!("{e}")))
         }
     };
+    let duration_ms = t0.elapsed().as_millis() as u64;
 
     let mut out = Vec::with_capacity(candidates.len());
+    let mut n_keep = 0u32;
+    let mut n_downgrade = 0u32;
+    let mut n_drop = 0u32;
     for (i, cand) in candidates.iter().enumerate() {
         let (verdict, confidence, note) = verdicts[i].clone();
+        match verdict {
+            JudgeVerdict::Keep => n_keep += 1,
+            JudgeVerdict::Downgrade => n_downgrade += 1,
+            JudgeVerdict::Drop => n_drop += 1,
+        }
         let final_finding = if verdict == JudgeVerdict::Downgrade {
             let mut f = cand.clone();
             f.severity = downgrade(f.severity);
@@ -299,6 +395,13 @@ fn run_judge(
             judge_note: note,
         });
     }
+    event_sink.emit(&CouncilEvent::JudgeDone {
+        n_keep,
+        n_downgrade,
+        n_drop,
+        duration_ms,
+        error: err.clone(),
+    });
     (out, err)
 }
 
@@ -828,6 +931,103 @@ index 0..1 100644
                 "proposer {i} missing scope body"
             );
         }
+    }
+
+    /// In-memory sink used by streaming-event tests. Recording is
+    /// thread-safe so a parallel proposer run produces a deterministic
+    /// count even though emit order is non-deterministic.
+    #[derive(Debug, Default)]
+    struct RecordingSink {
+        events: Mutex<Vec<crate::events::CouncilEvent>>,
+    }
+    impl crate::events::EventSink for RecordingSink {
+        fn emit(&self, event: &crate::events::CouncilEvent) {
+            self.events.lock().unwrap().push(event.clone());
+        }
+    }
+
+    #[test]
+    fn pipeline_emits_start_proposer_synthesize_judge_done_in_that_order() {
+        let proposer_blob = r#"{"findings":[{"file":"src/x.rs","line":1,"severity":"major","title":"foo","rationale":"r"}]}"#;
+        let judge_blob = r#"{"verdicts":[{"index":0,"verdict":"keep","confidence":0.95}]}"#;
+        let client = StubClient::default()
+            .with("specialty:", proposer_blob)
+            .with("judge on the aatxe", judge_blob);
+
+        let sink = std::sync::Arc::new(RecordingSink::default());
+        let opts = CouncilOptions {
+            model: "stub".into(),
+            repo: "x/y".into(),
+            pr: 1,
+            event_sink: sink.clone(),
+            ..CouncilOptions::default()
+        };
+        let _ = run_council(DIFF, &opts, &client).unwrap();
+
+        let captured = sink.events.lock().unwrap().clone();
+        // Expected sequence (order-sensitive across stages, not within
+        // parallel proposers):
+        //   Start, [4× ProposerStart + 4× ProposerDone interleaved],
+        //   SynthesizeDone, JudgeStart, JudgeDone,
+        //   FindingEmitted × shippable, Done
+        let kinds: Vec<&str> = captured
+            .iter()
+            .map(|ev| match ev {
+                crate::events::CouncilEvent::Start { .. } => "start",
+                crate::events::CouncilEvent::ProposerStart { .. } => "ps",
+                crate::events::CouncilEvent::ProposerDone { .. } => "pd",
+                crate::events::CouncilEvent::SynthesizeDone { .. } => "synth",
+                crate::events::CouncilEvent::JudgeStart { .. } => "jstart",
+                crate::events::CouncilEvent::JudgeDone { .. } => "jdone",
+                crate::events::CouncilEvent::FindingEmitted { .. } => "fe",
+                crate::events::CouncilEvent::Done { .. } => "done",
+            })
+            .collect();
+        assert_eq!(kinds.first().copied(), Some("start"));
+        assert_eq!(kinds.last().copied(), Some("done"));
+        // 4 proposer start + 4 proposer done events
+        assert_eq!(kinds.iter().filter(|&&k| k == "ps").count(), 4);
+        assert_eq!(kinds.iter().filter(|&&k| k == "pd").count(), 4);
+        assert_eq!(kinds.iter().filter(|&&k| k == "synth").count(), 1);
+        assert_eq!(kinds.iter().filter(|&&k| k == "jstart").count(), 1);
+        assert_eq!(kinds.iter().filter(|&&k| k == "jdone").count(), 1);
+        // One shippable finding → one FindingEmitted.
+        assert_eq!(kinds.iter().filter(|&&k| k == "fe").count(), 1);
+        // SynthesizeDone must fire before JudgeStart.
+        let synth_idx = kinds.iter().position(|k| *k == "synth").unwrap();
+        let jstart_idx = kinds.iter().position(|k| *k == "jstart").unwrap();
+        assert!(synth_idx < jstart_idx);
+        // Done is the last event.
+        let done_idx = kinds.iter().rposition(|k| *k == "done").unwrap();
+        assert_eq!(done_idx, kinds.len() - 1);
+    }
+
+    #[test]
+    fn empty_candidates_skips_judge_events() {
+        // Every proposer returns []; the synth output is empty; the
+        // judge call should short-circuit and emit neither JudgeStart
+        // nor JudgeDone. The Done event still fires.
+        let client = StubClient::default().with("specialty:", "{\"findings\":[]}");
+        let sink = std::sync::Arc::new(RecordingSink::default());
+        let opts = CouncilOptions {
+            model: "stub".into(),
+            event_sink: sink.clone(),
+            ..CouncilOptions::default()
+        };
+        let _ = run_council(DIFF, &opts, &client).unwrap();
+        let captured = sink.events.lock().unwrap().clone();
+        let has_jstart = captured
+            .iter()
+            .any(|ev| matches!(ev, crate::events::CouncilEvent::JudgeStart { .. }));
+        let has_jdone = captured
+            .iter()
+            .any(|ev| matches!(ev, crate::events::CouncilEvent::JudgeDone { .. }));
+        let has_done = captured
+            .iter()
+            .any(|ev| matches!(ev, crate::events::CouncilEvent::Done { .. }));
+        assert!(!has_jstart, "no judge call → no JudgeStart event");
+        assert!(!has_jdone, "no judge call → no JudgeDone event");
+        assert!(has_done, "Done must still fire on empty-candidate runs");
     }
 
     #[test]

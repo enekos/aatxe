@@ -67,6 +67,36 @@ runs under `--container-architecture linux/amd64` against the
 `catthehacker/ubuntu:act-latest` image (the Makefile passes those flags
 for you). `make act-ci-rust` runs just the heaviest job in isolation.
 
+## Install
+
+One-shot script-install of the latest released binary:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/enekos/aatxe/master/scripts/install.sh | sh
+```
+
+By default this drops `aatxe` at `$HOME/.local/bin/aatxe` and verifies
+the asset's `sha256` before writing the file. Knobs:
+
+```sh
+# Pin a version
+AATXE_VERSION=v0.2.0 curl -fsSL https://raw.githubusercontent.com/enekos/aatxe/master/scripts/install.sh | sh
+
+# Install system-wide (needs sudo)
+sudo AATXE_PREFIX=/usr/local curl -fsSL https://raw.githubusercontent.com/enekos/aatxe/master/scripts/install.sh | sh
+
+# Skip the checksum (not recommended)
+AATXE_NO_CHECK=1 curl -fsSL https://raw.githubusercontent.com/enekos/aatxe/master/scripts/install.sh | sh
+```
+
+Alternative install paths:
+
+* **From source.** `git clone … && cargo install --path crates/aatxe`.
+* **Cargo.** Once published to crates.io: `cargo install aatxe`.
+
+Releases are tag-driven — see `.github/workflows/release.yml` for the
+build matrix (darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64).
+
 ## Quick start
 
 ### 1. Write benches in your language of choice
@@ -288,6 +318,122 @@ aatxe council --pr 42 \
     --markdown /tmp/council.md \
     --post
 ```
+
+### Backends
+
+The council shells out to a local agent CLI per LLM call; the agent
+does the model + tool-use loop and writes the final assistant message
+to stdout. Two backends are wired today, selectable with `--backend`:
+
+| `--backend`      | binary it shells out to | auth                                  | endpoint                |
+|------------------|-------------------------|---------------------------------------|-------------------------|
+| `pi-proxy` (default) | `pi` (One Ping agent CLI)        | `KIMI_API_KEY` env var               | Moonshot `kimi-coding`  |
+| `claude-code`    | `claude` (Claude Code CLI)       | your Claude Code subscription/auth   | Anthropic               |
+
+Both backends pass a **read-only** tool allowlist (`Read`/`Grep`/`Glob`
+or equivalent) to the underlying agent. The allowlist is hardcoded in
+`pi_proxy.rs`/`claude_code.rs` and cannot be widened from outside —
+council can never run `Bash`, `Edit`, or `Write`.
+
+Backend-specific environment knobs:
+
+```bash
+# pi-proxy
+PI_BIN=/custom/path/to/pi PI_MODEL=kimi-k2-thinking aatxe council --pr 42
+
+# claude-code
+CLAUDE_BIN=/custom/path/to/claude CLAUDE_MODEL=opus \
+    CLAUDE_MAX_BUDGET_USD=2.0 \
+    aatxe council --pr 42 --backend claude-code
+```
+
+### Streaming pipeline events
+
+For long-running runs (real-LLM calls are minutes per proposer × four
+proposers per chunk), pass `--json-events <path>` to emit a JSON-Lines
+log of pipeline events:
+
+```bash
+aatxe council --pr 42 --json-events /tmp/council.events.jsonl
+# tail it from another terminal:
+tail -f /tmp/council.events.jsonl | jq -c 'select(.kind=="proposer_done")'
+```
+
+Use `--json-events -` to stream to stdout. The event taxonomy is
+`start`, `proposer_start`, `proposer_done`, `synthesize_done`,
+`judge_start`, `judge_done`, `finding_emitted`, `done` — see
+`crates/aatxe-council/src/events.rs` for the full schema.
+
+### Interactive curation
+
+By default (when stdin is a TTY *and* `--post` is set), the council
+pauses after the judge stage and walks the user through every
+shippable finding for a keep/drop decision. Force-on/force-off with
+`--interactive=true` / `--interactive=false`:
+
+```
+[1/3] CRITICAL [security] src/admin.ts:23
+  IDOR: /users/:id/export discloses any user's data
+  Rationale: handler queries users by req.params.id without checking req.user.id matches.
+  Confidence: 0.91
+  [k]eep / [d]rop / [s]kip-all / [q]uit-all (default k): d
+
+[2/3] MAJOR [correctness] src/db.ts:14
+  …
+```
+
+Dropped findings have their judge verdict flipped to `drop`, so the
+rendered markdown body filters them out via the existing
+`shippable()` path — the comment posted to GitHub matches what the
+human saw after curation.
+
+### Pre-PR self-review
+
+Run the council against your working tree's diff against `origin/master`
+before opening the PR:
+
+```bash
+make council-self            # uses the configured backend (real LLM calls)
+make council-self-stub       # same flow, deterministic stub (no quota)
+
+# or by hand against any base ref:
+BASE_REF=origin/main make council-self
+aatxe council --diff-file <(git diff origin/master...HEAD)
+```
+
+The `make` targets stage `tmp/council-self.{diff,json,md}` so you can
+inspect the artefacts before re-running. Combine with `--interactive`
+(default-on for TTY use) and `--confidence-floor 0.65` for a tight
+self-review loop:
+
+```bash
+aatxe council \
+    --diff-file <(git diff origin/master...HEAD) \
+    --confidence-floor 0.65 \
+    --interactive
+```
+
+### Confidence-floor calibration
+
+`make evals-calibrate` sweeps the eval corpus at multiple
+`--confidence-floor` values and prints a side-by-side metric table,
+making the choice of floor data-justified instead of a guess:
+
+```bash
+AATXE_FLOORS="0.55 0.60 0.65" make evals-calibrate
+# floor=0.55 → tmp/calibrate/floor-0.55.json
+# floor=0.60 → tmp/calibrate/floor-0.60.json
+# floor=0.65 → tmp/calibrate/floor-0.65.json
+#
+# ## floor=0.65 vs floor=0.55
+#   metric                               baseline         head            Δ
+#   …
+#   avgFalsePositivesPerCase                4.400        2.600       -1.800
+```
+
+Real-LLM calibration is gated behind `USE_REAL_KIMI=true` (it takes
+~60 min per floor) — use it when promoting a floor that the stub
+sweep proves is worth measuring against the real backend.
 
 ### Stub mode (offline / CI smoke test)
 

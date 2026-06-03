@@ -1,41 +1,62 @@
-//! `aatxe council` — fetch a PR diff, run the Kimi-backed agent council,
+//! `aatxe council` — fetch a PR diff, run the pi-proxy agent council,
 //! render the sticky markdown body, and optionally post it.
 //!
 //! Wires together:
 //! * [`crate::gh_diff::fetch_pr_diff`] — pulls the unified diff over
 //!   `Accept: application/vnd.github.v3.diff`.
-//! * [`crate::kimi_http::KimiClient`] — OpenAI-compatible Moonshot client.
+//! * [`crate::pi_proxy::PiAgentClient`] — spawns the local `pi` coding
+//!   agent per LLM call so proposers can `read`/`grep`/`find`/`ls` the
+//!   repo under review. Uses `KIMI_API_KEY` (forwarded to the child).
 //! * [`aatxe_council::pipeline::run_council`] — the proposer→judge
 //!   pipeline lives in the pure crate.
 //! * [`crate::github_http::UreqClient`] — same sticky-comment client the
 //!   perf gate uses, with the council's own marker.
 
-use crate::cli::CouncilArgs;
+use crate::claude_code::{ClaudeCodeClient, ClaudeCodeConfig};
+use crate::cli::{BackendArg, CouncilArgs};
 use crate::commands::Outcome;
 use crate::gh_diff::fetch_pr_diff;
 use crate::github_http::UreqClient;
-use crate::kimi_http::{KimiClient, KimiConfig};
+use crate::pi_proxy::{PiAgentClient, PiConfig};
 use crate::stub_client::{stub_enabled, StubKimi};
 use aatxe_core::github::{detect_context, validate_sticky, GithubContext};
 use aatxe_council::diff::parse_unified_diff;
+use aatxe_council::events::{CouncilEvent, EventSink, NullSink};
 use aatxe_council::llm::LlmClient;
 use aatxe_council::pipeline::{run_council, CouncilOptions};
 use aatxe_council::report::render_markdown;
 use aatxe_learn::{build_guidance, load_self_healing, InjectionContext};
 use anyhow::{anyhow, Context, Result};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 
 pub fn execute(args: CouncilArgs) -> Result<Outcome> {
     let use_stub = stub_enabled();
     let model = if use_stub {
         args.model.clone().unwrap_or_else(|| "stub".to_string())
     } else {
-        let kimi_cfg_peek = KimiConfig::from_env()
-            .ok_or_else(|| anyhow!("KIMI_API_KEY is not set — required for `aatxe council` (or export AATXE_COUNCIL_STUB=1 for an offline smoke test)"))?;
-        args.model
-            .clone()
-            .unwrap_or_else(|| kimi_cfg_peek.default_model.clone())
+        // Both real backends resolve credentials per-provider through the
+        // child process; we surface a display string for the report
+        // header only.
+        match args.backend {
+            BackendArg::PiProxy => {
+                let pi_cfg_peek = PiConfig::from_env();
+                args.model
+                    .clone()
+                    .unwrap_or_else(|| format!("pi+{}", pi_cfg_peek.model))
+            }
+            BackendArg::ClaudeCode => {
+                let cc_peek = ClaudeCodeConfig::from_env();
+                args.model.clone().unwrap_or_else(|| {
+                    cc_peek
+                        .model
+                        .clone()
+                        .map(|m| format!("claude-code+{m}"))
+                        .unwrap_or_else(|| "claude-code".to_string())
+                })
+            }
+        }
     };
 
     // Source diff + GH context.
@@ -76,15 +97,41 @@ pub fn execute(args: CouncilArgs) -> Result<Outcome> {
         (s, None)
     };
 
-    // Run the council. Pick the LLM client: stub (offline smoke test) or
-    // the real Kimi HTTP client.
+    // Run the council. Pick the LLM client: deterministic stub for the
+    // offline smoke-test path (`AATXE_COUNCIL_STUB=1`), or the pi-proxy
+    // agent runner otherwise.
     let client: Box<dyn LlmClient> = if use_stub {
-        eprintln!("aatxe council: AATXE_COUNCIL_STUB=1 — using deterministic stub LLM (no Moonshot calls)");
+        eprintln!("aatxe council: AATXE_COUNCIL_STUB=1 — using deterministic stub LLM (no Moonshot/Anthropic calls)");
         Box::new(StubKimi)
     } else {
-        let kimi_cfg = KimiConfig::from_env()
-            .ok_or_else(|| anyhow!("KIMI_API_KEY disappeared between checks"))?;
-        Box::new(KimiClient::new(kimi_cfg))
+        match args.backend {
+            BackendArg::PiProxy => {
+                let mut pi_cfg = PiConfig::from_env();
+                if let Some(p) = args.pi_binary.clone() {
+                    pi_cfg.binary = p;
+                }
+                eprintln!(
+                    "aatxe council: pi-proxy ({}/{}), tools=read+grep+find+ls",
+                    pi_cfg.provider, pi_cfg.model,
+                );
+                Box::new(PiAgentClient::new(pi_cfg))
+            }
+            BackendArg::ClaudeCode => {
+                let mut cc_cfg = ClaudeCodeConfig::from_env();
+                if let Some(p) = args.claude_binary.clone() {
+                    cc_cfg.binary = p;
+                }
+                eprintln!(
+                    "aatxe council: claude-code ({}{}), tools=Read+Grep+Glob",
+                    cc_cfg.model.as_deref().unwrap_or("subscription-default"),
+                    cc_cfg
+                        .max_budget_usd
+                        .map(|b| format!(", budget=${b}"))
+                        .unwrap_or_default(),
+                );
+                Box::new(ClaudeCodeClient::new(cc_cfg))
+            }
+        }
     };
     // Load the learning corpus (if any) and render the guidance block.
     // The council pipeline is decoupled from aatxe-learn — we hand it a
@@ -135,6 +182,11 @@ pub fn execute(args: CouncilArgs) -> Result<Outcome> {
         None => String::new(),
     };
 
+    let event_sink: Arc<dyn EventSink> = match &args.json_events {
+        Some(spec) => Arc::new(JsonLinesSink::open(spec.as_str())?),
+        None => Arc::new(NullSink),
+    };
+
     let opts = CouncilOptions {
         model: model.clone(),
         repo: repo.clone().unwrap_or_default(),
@@ -142,12 +194,39 @@ pub fn execute(args: CouncilArgs) -> Result<Outcome> {
         confidence_floor: args.confidence_floor,
         extra_ignored: args.extra_ignored.clone(),
         learned_guidance,
+        event_sink,
         ..CouncilOptions::default()
     };
-    let report =
+    let mut report =
         run_council(&diff_text, &opts, client.as_ref()).context("council pipeline failed")?;
 
-    // Render.
+    // Interactive curation — default-on when stdin is a TTY *and*
+    // `--post` is set (no point curating if nothing is going to be
+    // posted). `--interactive=true`/`false` forces either direction.
+    let want_interactive = match args.interactive {
+        Some(v) => v,
+        None => args.post && crate::curator::stdin_is_tty(),
+    };
+    if want_interactive {
+        let stdin = std::io::stdin();
+        let reader = stdin.lock();
+        let stderr = std::io::stderr();
+        let mut writer = stderr.lock();
+        let summary = crate::curator::curate_report(
+            &mut report,
+            std::io::BufReader::new(reader),
+            &mut writer,
+        )?;
+        if summary.dropped > 0 {
+            eprintln!(
+                "aatxe council: curator dropped {} finding(s) at indices {:?}",
+                summary.dropped, summary.dropped_indices,
+            );
+        }
+    }
+
+    // Render — runs AFTER curation so dropped findings are filtered out
+    // by `shippable()`'s verdict==Drop check.
     let body = render_markdown(&report);
 
     // Persist artefacts.
@@ -212,5 +291,129 @@ pub fn execute(args: CouncilArgs) -> Result<Outcome> {
         Ok(Outcome::Regressions)
     } else {
         Ok(Outcome::Ok)
+    }
+}
+
+/// `EventSink` that writes one JSON object per line to a configurable
+/// destination. Matches the `jq`-friendly `kind`-tagged shape defined in
+/// [`aatxe_council::events::CouncilEvent`]. Use `--json-events -` for
+/// stdout; anything else is treated as a path.
+///
+/// Writes are serialised behind a mutex so the parallel proposer
+/// threads can't interleave a half-written line on the consumer.
+/// `emit` swallows IO errors (a broken pipe shouldn't kill a 60-minute
+/// council run); fatal-on-open errors do surface so the CLI can fail
+/// fast when the user mistypes a path.
+enum JsonLinesTarget {
+    Stdout,
+    File(std::fs::File),
+}
+
+#[derive(Debug)]
+pub(crate) struct JsonLinesSink {
+    inner: Mutex<JsonLinesTarget>,
+}
+
+impl std::fmt::Debug for JsonLinesTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JsonLinesTarget::Stdout => write!(f, "Stdout"),
+            JsonLinesTarget::File(_) => write!(f, "File"),
+        }
+    }
+}
+
+impl JsonLinesSink {
+    pub(crate) fn open(spec: &str) -> Result<Self> {
+        let target = if spec == "-" || spec.is_empty() {
+            JsonLinesTarget::Stdout
+        } else {
+            let f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(spec)
+                .with_context(|| format!("opening --json-events sink {spec}"))?;
+            JsonLinesTarget::File(f)
+        };
+        Ok(Self {
+            inner: Mutex::new(target),
+        })
+    }
+
+    fn write_line(&self, line: &str) {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(_) => return, // poisoned — silently drop, council keeps running
+        };
+        let res: std::io::Result<()> = match &mut *guard {
+            JsonLinesTarget::Stdout => {
+                let mut out = std::io::stdout().lock();
+                out.write_all(line.as_bytes())
+                    .and_then(|()| out.write_all(b"\n"))
+            }
+            JsonLinesTarget::File(f) => f
+                .write_all(line.as_bytes())
+                .and_then(|()| f.write_all(b"\n")),
+        };
+        let _ = res; // best-effort
+    }
+}
+
+impl EventSink for JsonLinesSink {
+    fn emit(&self, event: &CouncilEvent) {
+        if let Ok(line) = serde_json::to_string(event) {
+            self.write_line(&line);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_lines_sink_writes_one_line_per_event_to_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let sink = JsonLinesSink::open(path.to_str().unwrap()).unwrap();
+        sink.emit(&CouncilEvent::Start {
+            repo: "x/y".into(),
+            pr: 1,
+            model: "stub".into(),
+            files_total: 1,
+            files_reviewed: 1,
+            n_chunks: 1,
+        });
+        sink.emit(&CouncilEvent::Done {
+            total_duration_ms: 42,
+            shippable_count: 0,
+            critical_count: 0,
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+        });
+        // Drop the sink so its mutex/file are flushed/closed.
+        drop(sink);
+        let body = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 2, "one JSON object per emit: {body}");
+        assert!(lines[0].contains("\"kind\":\"start\""));
+        assert!(lines[1].contains("\"kind\":\"done\""));
+        // Each line must parse as a CouncilEvent again — guards against
+        // accidental schema breakage between writer + reader.
+        for line in &lines {
+            let _: CouncilEvent =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("bad line {line}: {e}"));
+        }
+    }
+
+    #[test]
+    fn json_lines_sink_open_with_dash_does_not_touch_filesystem() {
+        let sink = JsonLinesSink::open("-").unwrap();
+        // Emitting to stdout in a unit test would pollute the test
+        // runner's output but should not panic or error.
+        sink.emit(&CouncilEvent::SynthesizeDone {
+            n_raw: 0,
+            n_deduped: 0,
+        });
     }
 }

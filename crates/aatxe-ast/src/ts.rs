@@ -199,6 +199,51 @@ fn walk(
             }
             return;
         }
+        "call_expression" => {
+            // Capture inline arrow/function callbacks passed to
+            // Router-style method calls — Express, Koa, Fastify, etc.
+            // Without this branch, an
+            //   `adminRouter.get("/x", requireAuth, async (req,res) => …)`
+            // emits zero symbols because the arrow is buried inside a
+            // `call_expression`'s arguments — no enclosing declaration
+            // for the existing walker to attach to. Aatxe eval case
+            // `security-authz-idor-export-route` (a real-world IDOR
+            // fixture) is 0/3 in stub-mode precisely because of this
+            // gap.
+            //
+            // Heuristic to avoid over-capture: only when the callee is
+            // `<obj>.<method>` with `method` in the HTTP-verb set AND
+            // the first argument is a string literal. That keeps
+            // `Promise.all([…].map(async x => …))` and `arr.filter(x =>
+            // …)` out of the scope index while reliably catching every
+            // Express/Koa/Fastify route handler we've seen.
+            //
+            // We do NOT early-return: nested calls inside the arrow
+            // body (e.g. `db.query(…)`) still need to be walked by the
+            // default fall-through recursion at the bottom of the
+            // function so the call-edge resolver picks them up.
+            if let Some((method, path)) = router_method_call(node, bytes) {
+                if let Some(args) = node.child_by_field_name("arguments") {
+                    for arg in named_children(args) {
+                        if matches!(
+                            arg.kind(),
+                            "arrow_function" | "function" | "function_expression"
+                        ) {
+                            out.push(LogicSymbol {
+                                id: format!("route:{method}:{path}"),
+                                name: format!("{method} {path}"),
+                                kind: SymbolKind::Function,
+                                exported: in_export,
+                                line: arg.start_position().row + 1,
+                                signature: signature_line(arg, source),
+                                control_flow: control_flow_summary(arg),
+                                doc: doc_comment_before(node, bytes),
+                            });
+                        }
+                    }
+                }
+            }
+        }
         _ => {}
     }
     for child in named_children(node) {
@@ -209,6 +254,46 @@ fn walk(
 fn field_text<'a>(node: Node<'a>, field: &str, bytes: &'a [u8]) -> Option<&'a str> {
     node.child_by_field_name(field)
         .and_then(|n| n.utf8_text(bytes).ok())
+}
+
+/// If `node` is a `call_expression` whose function looks like
+/// `<obj>.<method>(...)` with `<method>` in the HTTP-verb set and whose
+/// first argument is a string literal, return the matched method name
+/// (lowercased verbatim from the source) and the unquoted path.
+///
+/// Returns `None` for anything that doesn't fit the Router shape —
+/// guarding against false positives like `Promise.all([...])`,
+/// `arr.map(x => …)`, etc.
+fn router_method_call(node: Node, bytes: &[u8]) -> Option<(String, String)> {
+    let func = node.child_by_field_name("function")?;
+    if func.kind() != "member_expression" {
+        return None;
+    }
+    let prop = func.child_by_field_name("property")?;
+    let method_text = prop.utf8_text(bytes).ok()?;
+    if !is_router_method(method_text) {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    let first_arg = named_children(args).into_iter().next()?;
+    if first_arg.kind() != "string" {
+        return None;
+    }
+    let path_raw = first_arg.utf8_text(bytes).ok()?;
+    let path = path_raw
+        .trim_matches(|c: char| c == '"' || c == '\'' || c == '`')
+        .to_string();
+    if path.is_empty() {
+        return None;
+    }
+    Some((method_text.to_string(), path))
+}
+
+fn is_router_method(s: &str) -> bool {
+    matches!(
+        s,
+        "get" | "post" | "put" | "delete" | "patch" | "head" | "options" | "use" | "all"
+    )
 }
 
 /// If `node`'s parent is an `export_statement`, return the parent so the
@@ -454,5 +539,114 @@ mod tests {
         let g = describe("/** Renders the report. */\nexport function render(): void {}\n");
         let s = g.symbols.iter().find(|s| s.name == "render").unwrap();
         assert!(s.doc.contains("Renders the report"));
+    }
+
+    // ----------------------- Router-method captures -----------------------
+    //
+    // The fixes below are calibrated to the real eval case
+    // `security-authz-idor-export-route` — a multi-file Express IDOR
+    // fixture whose admin.ts wires routes via `adminRouter.get(path,
+    // middleware..., async (req, res) => …)`. Without the
+    // `call_expression` branch in `walk`, the file emits zero symbols
+    // (its only declaration is `export const adminRouter = Router();`,
+    // a call-expression initializer that's not callable in the
+    // describer's existing rules).
+
+    #[test]
+    fn router_get_with_middleware_and_arrow_callback_is_captured() {
+        let g = describe(
+            r#"
+import { Router } from "express";
+export const adminRouter = Router();
+
+adminRouter.get("/users/:id/export", requireAuth, async (req, res) => {
+  const user = await db.query("SELECT * FROM users WHERE id = $1", [req.params.id]);
+  return res.json({ user });
+});
+"#,
+        );
+        let route = g
+            .symbols
+            .iter()
+            .find(|s| s.id == "route:get:/users/:id/export")
+            .expect("router.get arrow callback should be captured");
+        assert_eq!(route.kind, SymbolKind::Function);
+        assert_eq!(route.name, "get /users/:id/export");
+        // The arrow function has no loops and one conditional? Let's
+        // not over-specify control_flow; the field's there for
+        // information, not gating. Just sanity-check signature looks
+        // like an arrow.
+        assert!(
+            route.signature.contains("=>") || route.signature.contains("async"),
+            "signature should resemble the arrow: {}",
+            route.signature
+        );
+    }
+
+    #[test]
+    fn multiple_router_routes_emit_distinct_symbols() {
+        // Two routes on the same router → two symbols with different
+        // ids. The line numbers should match the arrow function's row.
+        let g = describe(
+            "adminRouter.get(\"/a\", async (req, res) => {});\n\
+             adminRouter.post(\"/b\", (req, res) => {});\n",
+        );
+        let names: Vec<&str> = g.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"get /a"), "missing get /a, got {names:?}");
+        assert!(names.contains(&"post /b"), "missing post /b, got {names:?}");
+    }
+
+    #[test]
+    fn nested_call_expressions_dont_capture_non_route_arrows() {
+        // The router branch must NOT swallow inline arrows passed to
+        // generic methods like Promise.then / Array.map / .filter,
+        // even when the receiver happens to be a router-like name.
+        // Guarded by the "first arg is a string literal" check.
+        let g = describe(
+            "Promise.all([1,2,3].map(async (x) => x + 1)).then((xs) => xs);\n\
+             arr.filter((x) => x > 0).map((x) => x * 2);\n",
+        );
+        for s in &g.symbols {
+            assert!(
+                !s.id.starts_with("route:"),
+                "unexpected route symbol from non-router call: {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn router_use_with_string_and_arrow_is_captured() {
+        // app.use("/api", (req, res, next) => { … }) is the standard
+        // Express middleware shape and should be captured.
+        let g = describe("app.use(\"/api\", (req, res, next) => { next(); });\n");
+        assert!(g.symbols.iter().any(|s| s.id == "route:use:/api"));
+    }
+
+    #[test]
+    fn router_use_without_string_arg_is_not_captured() {
+        // app.use(middleware) — first arg is an identifier, not a
+        // string. We treat this as "mounting a sub-router" and don't
+        // emit a symbol (the sub-router's own routes are captured at
+        // their definition site).
+        let g = describe("app.use(adminRouter);\napp.use(requireAuth);\n");
+        for s in &g.symbols {
+            assert!(
+                !s.id.starts_with("route:"),
+                "unexpected route symbol: {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn router_get_with_no_callback_arg_emits_no_symbol() {
+        // Just a string literal — no handler. We should NOT emit a
+        // symbol because there's no callable to point the council at.
+        let g = describe("adminRouter.get(\"/path\");\n");
+        for s in &g.symbols {
+            assert!(
+                !s.id.starts_with("route:"),
+                "should not emit a symbol when there's no arrow arg: {s:?}"
+            );
+        }
     }
 }

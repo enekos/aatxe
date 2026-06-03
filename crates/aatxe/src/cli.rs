@@ -240,6 +240,47 @@ pub struct CouncilArgs {
     /// prefix. Default 8.
     #[arg(long, default_value_t = 8)]
     pub learning_max_entries: usize,
+    /// Path or executable name of the `pi` binary used to drive the
+    /// council. Defaults to `pi` on `$PATH`. The council shells out to
+    /// `pi` per LLM call so each proposer can read/grep/find/ls the repo
+    /// being reviewed; `KIMI_API_KEY` is forwarded to the subprocess.
+    #[arg(long, env = "PI_BIN")]
+    pub pi_binary: Option<PathBuf>,
+    /// Which LLM backend the council drives. `pi-proxy` (default) shells
+    /// out to the locally-installed `pi` agent against the Kimi-coding
+    /// endpoint. `claude-code` shells out to the locally-installed
+    /// `claude` CLI and uses the engineer's Claude Code
+    /// subscription/auth — no separate API key needed.
+    #[arg(long, value_enum, default_value_t = BackendArg::PiProxy)]
+    pub backend: BackendArg,
+    /// Path or executable name of the `claude` binary used when
+    /// `--backend=claude-code`. Defaults to `claude` on `$PATH`.
+    #[arg(long, env = "CLAUDE_BIN")]
+    pub claude_binary: Option<PathBuf>,
+    /// Stream pipeline events as JSON Lines to this path while the
+    /// council runs. Use `-` for stdout. Each line is a self-contained
+    /// `CouncilEvent` JSON object (proposer_start, finding_emitted,
+    /// judge_done, etc) — see [`aatxe_council::events`]. Useful for
+    /// piping a long-running run into a TUI or for post-hoc debugging.
+    #[arg(long)]
+    pub json_events: Option<String>,
+    /// Pause after the judge stage and interactively curate findings
+    /// before rendering / posting. For each shippable finding the user
+    /// picks `[k]eep / [d]rop / [s]kip-all`. Defaults to on when stdin
+    /// is a TTY *and* `--post` is set; off otherwise (so headless CI
+    /// keeps its existing one-shot behaviour). `--interactive=false`
+    /// forces it off; `--interactive=true` forces it on regardless of
+    /// TTY (useful when stdin is a pipe but you still want the prompt).
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    pub interactive: Option<bool>,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum BackendArg {
+    /// Shell out to the local `pi` agent CLI (Kimi-coding endpoint).
+    PiProxy,
+    /// Shell out to the local `claude` CLI (Claude Code subscription).
+    ClaudeCode,
 }
 
 /// `aatxe evals` — run the eval harness.

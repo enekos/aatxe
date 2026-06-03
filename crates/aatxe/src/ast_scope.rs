@@ -141,6 +141,52 @@ mod tests {
     }
 
     #[test]
+    fn integration_against_real_eval_case_idor_export_route_picks_up_router_arrows() {
+        // Lock in the AST-scope coverage for `security-authz-idor-
+        // export-route` — the case projects/aatxe.md:204 calls out as
+        // 0/3 in the real-LLM run precisely because the describer used
+        // to emit zero symbols for its `admin.ts`. The router arrow
+        // capture added to the TS describer means the prompt now
+        // receives concrete `get /audit-log` and `get /users/:id/export`
+        // entries the model can reason about.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let root = std::path::Path::new(manifest_dir).join("../..");
+        let diff_path = root.join("evals/council/cases/security-authz-idor-export-route.diff");
+        let files_dir = root.join("evals/council/cases/files/security-authz-idor-export-route");
+        if !diff_path.exists() || !files_dir.exists() {
+            return;
+        }
+        let diff = std::fs::read_to_string(&diff_path).unwrap();
+        let mut files = HashMap::new();
+        for entry in walkdir::WalkDir::new(&files_dir) {
+            let entry = entry.unwrap();
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel = entry.path().strip_prefix(&files_dir).unwrap();
+            files.insert(
+                rel.to_string_lossy().replace('\\', "/"),
+                std::fs::read_to_string(entry.path()).unwrap(),
+            );
+        }
+        let changed: Vec<String> = aatxe_council::diff::parse_unified_diff(&diff)
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        let scope = super::build_scope_for_review(&files, &changed);
+        assert!(
+            !scope.is_empty(),
+            "IDOR eval case must now produce a non-empty AST scope"
+        );
+        // The route symbols are the load-bearing addition for this case.
+        // Path-string is matched verbatim (no slash-stripping).
+        assert!(
+            scope.contains("/users/:id/export") || scope.contains("get /users/:id/export"),
+            "scope must surface the IDOR'd route handler:\n{scope}"
+        );
+    }
+
+    #[test]
     fn empty_inputs_produce_empty_scope() {
         let scope = build_scope_for_review(&HashMap::new(), &[]);
         assert!(scope.is_empty());

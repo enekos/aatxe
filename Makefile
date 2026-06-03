@@ -187,6 +187,79 @@ council-dry-run: $(TMP) build-rust ## Pipe the bundled council fixture diff thro
 	    && echo "    ✓ council-dry-run: wrote $(TMP)/council-dry.{json,md}"
 
 # ----------------------------------------------------------------------------
+# Pre-PR self-review
+# ----------------------------------------------------------------------------
+#
+# Run the council against the local working tree's diff against
+# `origin/master` (or `$BASE_REF`). Useful as the last step before
+# `gh pr create`. Two flavours:
+#
+#   • `make council-self`       — uses the user's configured backend
+#                                  (pi-proxy by default). Real LLM calls.
+#   • `make council-self-stub`  — same flow, but `AATXE_COUNCIL_STUB=1`
+#                                  so it's fast/free. Smoke-tests the
+#                                  diff-from-worktree plumbing without
+#                                  burning model quota.
+#
+# Both write to `$(TMP)/council-self.{json,md}` and print the rendered
+# markdown to stdout.
+
+BASE_REF ?= origin/master
+
+.PHONY: council-self
+council-self: $(TMP) build-rust ## Run the council against the local diff (HEAD vs origin/master). Set BASE_REF to override.
+	$(call say,council-self)
+	@if ! git rev-parse --verify --quiet $(BASE_REF) > /dev/null; then \
+	    echo "    ✗ base ref $(BASE_REF) not found locally — try \`git fetch origin master\` first."; \
+	    exit 1; \
+	fi
+	@git diff $(BASE_REF)...HEAD > $(TMP)/council-self.diff
+	@if [ ! -s $(TMP)/council-self.diff ]; then \
+	    echo "    ✗ empty diff vs $(BASE_REF); commit something first or check the base ref."; \
+	    exit 1; \
+	fi
+	$(AATXE_BIN) council --diff-file $(TMP)/council-self.diff \
+	    --out $(TMP)/council-self.json \
+	    --markdown $(TMP)/council-self.md
+	@head -c 600 $(TMP)/council-self.md && echo "" \
+	    && echo "    ✓ council-self: wrote $(TMP)/council-self.{diff,json,md}"
+
+.PHONY: council-self-stub
+council-self-stub: $(TMP) build-rust ## Same as council-self but with the deterministic stub (no Kimi/Claude calls).
+	$(call say,council-self-stub)
+	@if ! git rev-parse --verify --quiet $(BASE_REF) > /dev/null; then \
+	    echo "    ✗ base ref $(BASE_REF) not found locally — try \`git fetch origin master\` first."; \
+	    exit 1; \
+	fi
+	@git diff $(BASE_REF)...HEAD > $(TMP)/council-self.diff
+	@if [ ! -s $(TMP)/council-self.diff ]; then \
+	    echo "    ✗ empty diff vs $(BASE_REF); commit something first."; \
+	    exit 1; \
+	fi
+	AATXE_COUNCIL_STUB=1 $(AATXE_BIN) council --diff-file $(TMP)/council-self.diff \
+	    --out $(TMP)/council-self.json \
+	    --markdown $(TMP)/council-self.md
+	@head -c 400 $(TMP)/council-self.md && echo "" \
+	    && echo "    ✓ council-self-stub: wrote $(TMP)/council-self.{diff,json,md}"
+
+# ----------------------------------------------------------------------------
+# Confidence-floor calibration
+# ----------------------------------------------------------------------------
+#
+# Sweep the council's `--confidence-floor` setting against the labeled
+# eval corpus and report the FP/case + critical-recall side-by-side per
+# floor. Backed by `scripts/calibrate-confidence-floor.sh`.
+#
+# Headline goal: justify raising the floor 0.55 → 0.65 with data
+# (per projects/aatxe.md:203 action #2). Without scaffolding this is a
+# manual ~60-minute exercise; with it, one `make evals-calibrate` call.
+
+.PHONY: evals-calibrate
+evals-calibrate: $(TMP) build-rust ## Re-run the eval corpus at multiple --confidence-floor settings + diff metrics
+	$(call say,evals-calibrate)
+	@scripts/calibrate-confidence-floor.sh "$(TMP)" "$(AATXE_BIN)"
+
+# ----------------------------------------------------------------------------
 # Learning corpus (`aatxe learn`)
 # ----------------------------------------------------------------------------
 #

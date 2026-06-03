@@ -6,7 +6,8 @@
 
 use aatxe_bench::{bench, Suite};
 use aatxe_council::diff::{
-    chunk_for_review_owned, filter_ignored, parse_unified_diff, ChunkPolicy, DEFAULT_IGNORED_PATTERNS,
+    chunk_for_review_owned, filter_ignored, parse_unified_diff, ChunkPolicy,
+    DEFAULT_IGNORED_PATTERNS,
 };
 use aatxe_council::persona::Persona;
 use aatxe_council::prompt::build_proposer_request;
@@ -56,10 +57,8 @@ fn main() {
                 let slot = idx % pool.len();
                 let input = pool[slot].drain(..).collect::<Vec<_>>();
                 filter_idx.set(idx + 1);
-                let (kept, dropped) = filter_ignored(
-                    std::hint::black_box(input),
-                    DEFAULT_IGNORED_PATTERNS,
-                );
+                let (kept, dropped) =
+                    filter_ignored(std::hint::black_box(input), DEFAULT_IGNORED_PATTERNS);
                 // Recover kept files back into the pool; dropped paths are discarded.
                 pool[slot] = kept;
                 std::hint::black_box(dropped);
@@ -81,10 +80,7 @@ fn main() {
                 let slot = idx % pool.len();
                 let input = pool[slot].drain(..).collect::<Vec<_>>();
                 chunk_idx.set(idx + 1);
-                let c = chunk_for_review_owned(
-                    std::hint::black_box(input),
-                    ChunkPolicy::default(),
-                );
+                let c = chunk_for_review_owned(std::hint::black_box(input), ChunkPolicy::default());
                 // Recover the drained files back into the pool slot so the
                 // next iteration can reuse it.
                 pool[slot] = c.into_iter().flat_map(|ch| ch.files).collect();

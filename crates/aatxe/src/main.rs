@@ -7,11 +7,13 @@
 
 mod adapter;
 mod ast_scope;
+mod claude_code;
 mod cli;
 mod commands;
+mod curator;
 mod gh_diff;
 mod github_http;
-mod kimi_http;
+mod pi_proxy;
 mod stub_client;
 
 use std::process::ExitCode;

@@ -25,6 +25,12 @@ examples/**/*.tsbuildinfo
 **/aatxe-report.json
 **/aatxe-report.md
 
+# Local dev artefacts (calibration sweeps, smoke runs, logs)
+tmp/calibrate/
+tmp/smoke/
+tmp/*.log
+tmp/aatxe-go-runner
+
 # Secrets
 .env
 .env.local

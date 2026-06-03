@@ -3,8 +3,9 @@
 //! 1. Run the stats eval (deterministic synthetic A/B pairs).
 //! 2. Run the council eval over every case in the corpus directory.
 //!    LLM client is the deterministic [`crate::stub_client::StubKimi`] by
-//!    default; `--council-real-llm` swaps in the real Kimi client (requires
-//!    `KIMI_API_KEY`).
+//!    default; `--council-real-llm` swaps in the [`crate::pi_proxy::PiAgentClient`]
+//!    (requires `KIMI_API_KEY` so the spawned `pi` child can reach
+//!    Moonshot).
 //! 3. Serialise the result to JSON.
 //! 4. Optionally render a markdown summary.
 //! 5. Optionally diff against a baseline; exit 2 on regression past
@@ -12,7 +13,7 @@
 
 use crate::cli::EvalsArgs;
 use crate::commands::Outcome;
-use crate::kimi_http::{KimiClient, KimiConfig};
+use crate::pi_proxy::{PiAgentClient, PiConfig};
 use crate::stub_client::StubKimi;
 use aatxe_council::llm::LlmClient;
 use aatxe_council::pipeline::{run_council_with_files, CouncilOptions};
@@ -60,13 +61,14 @@ pub fn execute(args: EvalsArgs) -> Result<Outcome> {
             corpus.display()
         );
         let client: Box<dyn LlmClient> = if args.council_real_llm {
-            let cfg = KimiConfig::from_env().ok_or_else(|| {
-                anyhow!(
+            if std::env::var("KIMI_API_KEY").is_err() {
+                return Err(anyhow!(
                     "--council-real-llm requires KIMI_API_KEY in the environment \
-                     (drop the flag for a stub-LLM smoke test)"
-                )
-            })?;
-            Box::new(KimiClient::new(cfg))
+                     (the pi child uses it to reach Moonshot; drop the flag for a \
+                     stub-LLM smoke test)"
+                ));
+            }
+            Box::new(PiAgentClient::new(PiConfig::from_env()))
         } else {
             Box::new(StubKimi)
         };
@@ -98,9 +100,8 @@ pub fn execute(args: EvalsArgs) -> Result<Outcome> {
             );
             let opts = CouncilOptions {
                 model: if args.council_real_llm {
-                    KimiConfig::from_env()
-                        .map(|c| c.default_model)
-                        .unwrap_or_else(|| "kimi-k2.6".into())
+                    let pi_cfg = PiConfig::from_env();
+                    format!("pi+{}", pi_cfg.model)
                 } else {
                     "stub".into()
                 },

@@ -246,7 +246,11 @@ pub fn parse_unified_diff(text: &str) -> Vec<ParsedFile> {
             let mut handles = Vec::with_capacity(n_threads);
             for chunk in pieces.chunks(chunk_size) {
                 handles.push(s.spawn(|| {
-                    chunk.iter().copied().filter_map(parse_one_file).collect::<Vec<_>>()
+                    chunk
+                        .iter()
+                        .copied()
+                        .filter_map(parse_one_file)
+                        .collect::<Vec<_>>()
                 }));
             }
             let mut out = Vec::with_capacity(pieces.len());

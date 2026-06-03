@@ -92,7 +92,10 @@ fn is_duplicate(a: &Finding, b: &Finding, opts: SynthOptions) -> bool {
 /// Tokenise a title into a reusable buffer.  Returns the number of tokens.
 fn tokenise<'a>(s: &'a str, buf: &mut Vec<&'a str>) -> usize {
     buf.clear();
-    buf.extend(s.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()));
+    buf.extend(
+        s.split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty()),
+    );
     buf.sort_unstable();
     buf.dedup();
     buf.len()

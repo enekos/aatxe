@@ -42,6 +42,7 @@
 //! ```
 
 pub mod diff;
+pub mod events;
 pub mod llm;
 pub mod parse;
 pub mod persona;
@@ -55,6 +56,7 @@ pub use diff::{
     attach_file_contexts, chunk_for_review_with_related, filter_ignored, parse_unified_diff,
     ChunkPolicy, DiffChunk, ParsedFile, RelatedFile,
 };
+pub use events::{CouncilEvent, EventSink, NullSink};
 pub use llm::{ChatMessage, ChatRequest, ChatResponse, LlmClient, LlmError, Role};
 pub use parse::parse_findings_json;
 pub use persona::{judge_system_prompt, persona_system_prompt, Persona};
