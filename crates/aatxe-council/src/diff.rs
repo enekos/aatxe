@@ -474,7 +474,7 @@ pub fn chunk_for_review(
 ) -> Vec<DiffChunk> {
     let mut chunks: Vec<DiffChunk> = Vec::new();
     let mut cur_files: Vec<ParsedFile> = Vec::new();
-    let mut cur_body = String::new();
+    let mut cur_body = String::with_capacity(policy.max_chunk_bytes);
     let mut cur_context_bytes: usize = 0;
 
     for f in files {
@@ -507,9 +507,12 @@ pub fn chunk_for_review(
         let projected = cur_body.len() + f_trunc.body.len() + 1;
         if !cur_files.is_empty() && projected > policy.max_chunk_bytes {
             chunks.push(DiffChunk {
-                files: std::mem::take(&mut cur_files),
+                files: std::mem::replace(&mut cur_files, Vec::with_capacity(32)),
                 bytes: cur_body.len(),
-                body: std::mem::take(&mut cur_body),
+                body: std::mem::replace(
+                    &mut cur_body,
+                    String::with_capacity(policy.max_chunk_bytes),
+                ),
                 related: pack_related(related, policy),
             });
             cur_context_bytes = 0;
