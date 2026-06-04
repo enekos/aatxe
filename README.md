@@ -433,7 +433,25 @@ AATXE_FLOORS="0.55 0.60 0.65" make evals-calibrate
 
 Real-LLM calibration is gated behind `USE_REAL_KIMI=true` (it takes
 ~60 min per floor) — use it when promoting a floor that the stub
-sweep proves is worth measuring against the real backend.
+sweep proves is worth measuring against the real backend. Either way,
+the script's last step re-runs the eval gate at the default floor
+against the committed baseline, so a sweep that lowers the headline
+metric past tolerance still trips exit 2:
+
+```bash
+# Local — stub sweep, finishes in <30s
+make evals-calibrate
+
+# Local — real Kimi, ~60min/floor, requires KIMI_API_KEY
+make evals-calibrate-real
+
+# CI — workflow_dispatch on `aatxe-evals.yml` with calibrate=true
+# (and optionally use-real-kimi=true to do the slow path on GH runners)
+```
+
+Promote a new default by editing the `--confidence-floor` default in
+`crates/aatxe/src/cli.rs` and re-running `make evals-update-baseline`
+to lock the headline metric in.
 
 ### Stub mode (offline / CI smoke test)
 

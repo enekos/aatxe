@@ -255,9 +255,14 @@ council-self-stub: $(TMP) build-rust ## Same as council-self but with the determ
 # manual ~60-minute exercise; with it, one `make evals-calibrate` call.
 
 .PHONY: evals-calibrate
-evals-calibrate: $(TMP) build-rust ## Re-run the eval corpus at multiple --confidence-floor settings + diff metrics
+evals-calibrate: $(TMP) build-rust ## Re-run the eval corpus at multiple --confidence-floor settings + diff metrics (stub LLM)
 	$(call say,evals-calibrate)
 	@scripts/calibrate-confidence-floor.sh "$(TMP)" "$(AATXE_BIN)"
+
+.PHONY: evals-calibrate-real
+evals-calibrate-real: $(TMP) build-rust ## Confidence-floor sweep against real Kimi. Requires KIMI_API_KEY. ~60min/floor.
+	$(call say,evals-calibrate-real)
+	@USE_REAL_KIMI=true scripts/calibrate-confidence-floor.sh "$(TMP)" "$(AATXE_BIN)"
 
 # ----------------------------------------------------------------------------
 # Learning corpus (`aatxe learn`)

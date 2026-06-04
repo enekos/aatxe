@@ -1,17 +1,34 @@
-# Self-test workflow for the aatxe agent council.
+# Self-test workflow for the aatxe agent council — runs on aatxe's own
+# PRs against the real PR diff (not a bundled fixture).
 #
-# Unlike the reusable workflow (aatxe-council.yml), this one builds the
-# aatxe CLI from the *checked-out workspace* — it's designed to be run on
-# aatxe's own PRs and inside `act` for local CI verification, before the
-# repo has any published release artefacts.
+# Modes, in order of cost:
 #
-# Default mode: stub LLM (env AATXE_COUNCIL_STUB=1). The stub produces
-# deterministic canned findings against the bundled fixture diff so the
-# whole pipeline (workspace build → CLI run → sticky-marker rendering →
-# exit-code gate) is exercised without burning Moonshot quota.
+#   1. Stub LLM, real PR diff (DEFAULT on `pull_request`).
+#      `AATXE_COUNCIL_STUB=1` short-circuits every Moonshot/Anthropic
+#      call; the stub returns deterministic canned findings. We still
+#      fetch the real PR diff over the GH API and walk it through the
+#      full proposer → judge → render pipeline, which catches wiring
+#      bugs that the fixture-only path misses (renames, large multi-file
+#      diffs, branch-vs-target paths). Free, deterministic, runs on
+#      every PR.
 #
-# To exercise the real Kimi integration, pass `KIMI_API_KEY` as a secret;
-# the workflow auto-flips off stub mode when the key is present.
+#   2. Fixture mode (workflow_dispatch with `mode=fixture`).
+#      Falls back to the bundled `examples/council-bench/fixtures/sample.diff`
+#      so the council can be exercised without an open PR — useful for
+#      smoke-testing the pipeline in isolation (or under `act`).
+#
+#   3. Real LLM, real PR diff (workflow_dispatch with `mode=real` and
+#      the right secret). Requires either `KIMI_API_KEY` (pi-proxy
+#      backend) or Claude Code auth on the runner (claude-code backend).
+#      Posts the sticky `<!-- aatxe:council -->` comment when triggered
+#      on a real PR.
+#
+# Default `pull_request` triggers mode 1 only — mode 3 is gated behind
+# `workflow_dispatch` so the PR queue never blocks on real-LLM cost or
+# token availability. Once `KIMI_API_KEY` is provisioned as a repo
+# secret + a `pi` install step is wired up, this workflow can be
+# extended to auto-promote `pull_request` runs to mode 3 when the
+# secret is present.
 
 name: aatxe-council-selftest
 
@@ -19,11 +36,28 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      use-real-kimi:
-        description: "Set to 'true' to call the real Kimi API (otherwise the stub LLM is used)"
+      mode:
+        description: "stub | fixture | real"
         required: false
-        default: 'false'
+        default: 'stub'
+        type: choice
+        options:
+          - stub
+          - fixture
+          - real
+      pr-number:
+        description: "PR number to review (required when mode != fixture and not triggered by pull_request)"
+        required: false
+        default: ''
         type: string
+      backend:
+        description: "LLM backend when mode=real (pi-proxy | claude-code)"
+        required: false
+        default: 'pi-proxy'
+        type: choice
+        options:
+          - pi-proxy
+          - claude-code
 
 permissions:
   contents: read
@@ -45,46 +79,107 @@ jobs:
       - name: Build aatxe CLI from workspace
         run: cargo build --release -p aatxe
 
-      - name: Decide stub vs. real Kimi
-        id: mode
+      - name: Resolve mode + PR number
+        id: cfg
         env:
-          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
-          USE_REAL: ${{ github.event.inputs.use-real-kimi }}
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+          INPUT_PR: ${{ github.event.inputs.pr-number }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          # Don't expand the secret into the shell — just check
+          # presence by length-of-non-empty. GH masks the value in logs
+          # but reading it via env keeps it out of the rendered command.
+          HAS_KIMI: ${{ secrets.KIMI_API_KEY != '' }}
+          HAS_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY != '' }}
         run: |
-          if [ "$USE_REAL" = "true" ] && [ -n "$KIMI_API_KEY" ]; then
-            echo "stub=0" >> "$GITHUB_OUTPUT"
-            echo "    → using real Kimi (KIMI_API_KEY present, use-real-kimi=true)"
-          else
-            echo "stub=1" >> "$GITHUB_OUTPUT"
-            if [ "$USE_REAL" = "true" ]; then
-              echo "    → use-real-kimi=true but KIMI_API_KEY is empty; falling back to stub"
-            else
-              echo "    → using stub LLM (no Moonshot calls)"
-            fi
+          # Default to `stub` for pull_request events; honor the input
+          # for workflow_dispatch. `real` falls back to `stub` when the
+          # required backend secret isn't present so the job still runs
+          # green instead of erroring on a missing key.
+          mode="${INPUT_MODE:-stub}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            mode="stub"
+          fi
+          pr="${INPUT_PR:-$PR_NUM}"
+
+          if [ "$mode" = "real" ] && [ "$HAS_KIMI" != "true" ] && [ "$HAS_ANTHROPIC" != "true" ]; then
+            echo "    → mode=real requested but no backend secret set; downgrading to stub"
+            mode="stub"
+          fi
+          if [ "$mode" != "fixture" ] && [ -z "$pr" ]; then
+            echo "    → no PR number available (manual run without pr-number); downgrading to fixture"
+            mode="fixture"
           fi
 
-      - name: Run council against the bundled fixture diff
+          echo "mode=$mode"     >> "$GITHUB_OUTPUT"
+          echo "pr=$pr"         >> "$GITHUB_OUTPUT"
+          echo "    → resolved: mode=$mode pr=$pr"
+
+      - name: Run council (stub LLM, real PR diff)
+        if: steps.cfg.outputs.mode == 'stub' && steps.cfg.outputs.pr != ''
         env:
-          AATXE_COUNCIL_STUB: ${{ steps.mode.outputs.stub }}
-          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
-          KIMI_BASE_URL: ${{ secrets.KIMI_BASE_URL }}
-          KIMI_MODEL: ${{ secrets.KIMI_MODEL }}
+          AATXE_COUNCIL_STUB: '1'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          mkdir -p /tmp/council
+          ./target/release/aatxe council \
+            --pr ${{ steps.cfg.outputs.pr }} \
+            --confidence-floor 0.55 \
+            --markdown /tmp/council/selftest.md \
+            --out /tmp/council/selftest.json
+
+      - name: Run council (stub LLM, fixture diff)
+        if: steps.cfg.outputs.mode == 'fixture'
+        env:
+          AATXE_COUNCIL_STUB: '1'
+        run: |
+          mkdir -p /tmp/council
           ./target/release/aatxe council \
             --diff-file examples/council-bench/fixtures/sample.diff \
             --confidence-floor 0.55 \
-            --markdown /tmp/council-selftest.md \
-            --out /tmp/council-selftest.json
+            --markdown /tmp/council/selftest.md \
+            --out /tmp/council/selftest.json
+
+      - name: Run council (real LLM, real PR diff, post comment)
+        if: steps.cfg.outputs.mode == 'real' && steps.cfg.outputs.pr != ''
+        env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          KIMI_BASE_URL: ${{ secrets.KIMI_BASE_URL }}
+          KIMI_MODEL: ${{ secrets.KIMI_MODEL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/council
+          ./target/release/aatxe council \
+            --pr ${{ steps.cfg.outputs.pr }} \
+            --backend ${{ github.event.inputs.backend || 'pi-proxy' }} \
+            --confidence-floor 0.55 \
+            --markdown /tmp/council/selftest.md \
+            --out /tmp/council/selftest.json \
+            --post
 
       - name: Assert sticky marker + JSON shape
         run: |
-          grep -q '<!-- aatxe:council -->' /tmp/council-selftest.md \
+          set -e
+          test -f /tmp/council/selftest.md || { echo "✗ markdown missing"; exit 1; }
+          test -f /tmp/council/selftest.json || { echo "✗ json missing"; exit 1; }
+          grep -q '<!-- aatxe:council -->' /tmp/council/selftest.md \
             || { echo "✗ sticky marker missing"; exit 1; }
-          jq -e '.proposerReviews | length == 4' /tmp/council-selftest.json >/dev/null \
+          jq -e '.proposerReviews | length == 4' /tmp/council/selftest.json >/dev/null \
             || { echo "✗ proposer count != 4"; exit 1; }
-          jq -e '.filesReviewed >= 4' /tmp/council-selftest.json >/dev/null \
-            || { echo "✗ filesReviewed too low"; exit 1; }
+          # `filesReviewed` is data-dependent — small PRs touch 1 file,
+          # the fixture touches 4. Just require the field is present and
+          # non-negative.
+          jq -e '.filesReviewed >= 0' /tmp/council/selftest.json >/dev/null \
+            || { echo "✗ filesReviewed missing or invalid"; exit 1; }
           echo "✓ council selftest produced a well-formed sticky body"
 
       - name: Print rendered body (first 120 lines)
-        run: head -120 /tmp/council-selftest.md
+        run: head -120 /tmp/council/selftest.md
+
+      - name: Upload selftest artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: council-selftest
+          path: /tmp/council/
+          retention-days: 14
