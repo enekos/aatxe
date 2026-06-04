@@ -39,25 +39,71 @@ impl Default for SynthOptions {
 /// 2. Sort: severity desc, then file asc, then line asc, then title asc —
 ///    deterministic for tests and for human review.
 pub fn dedup_and_rank(findings: Vec<Finding>, opts: SynthOptions) -> Vec<Finding> {
+    if findings.len() <= 1 {
+        let mut v = findings;
+        v.sort_by(|a, b| {
+            b.severity
+                .cmp(&a.severity)
+                .then(a.file.cmp(&b.file))
+                .then(a.line.unwrap_or(0).cmp(&b.line.unwrap_or(0)))
+                .then(a.title.cmp(&b.title))
+        });
+        return v;
+    }
+
+    // Sort by file, then line (None last), then title so that potential
+    // duplicates are adjacent.  This lets us scan backwards only over the
+    // same-file window instead of the full O(N²) search.
+    let mut findings = findings;
+    findings.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then(
+                a.line
+                    .unwrap_or(u32::MAX)
+                    .cmp(&b.line.unwrap_or(u32::MAX)),
+            )
+            .then(a.title.cmp(&b.title))
+    });
+
     let mut merged: Vec<Finding> = Vec::with_capacity(findings.len());
     for f in findings {
-        if let Some(target) = merged.iter_mut().find(|m| is_duplicate(m, &f, opts)) {
-            if f.severity > target.severity {
-                target.severity = f.severity;
+        let mut found = false;
+        for m in merged.iter_mut().rev() {
+            if m.file != f.file {
+                break;
             }
-            target.raised_by = match (&target.raised_by, &f.raised_by) {
-                (Some(a), Some(b)) if !a.split('+').any(|t| t == b) => Some(format!("{a}+{b}")),
-                (Some(a), _) => Some(a.clone()),
-                (None, Some(b)) => Some(b.clone()),
-                (None, None) => None,
-            };
-            // Prefer the longer rationale (more information).
-            if f.rationale.len() > target.rationale.len() {
-                target.rationale = f.rationale;
+            // Early prune: both have lines and are farther apart than the
+            // window → all earlier items are even farther away.
+            if let (Some(lm), Some(lf)) = (m.line, f.line) {
+                if lf.abs_diff(lm) > opts.line_window {
+                    break;
+                }
             }
-            if target.suggestion.is_none() && f.suggestion.is_some() {
-                target.suggestion = f.suggestion;
+            if title_jaccard(&m.title, &f.title) >= opts.title_similarity {
+                if f.severity > m.severity {
+                    m.severity = f.severity;
+                }
+                m.raised_by = match (&m.raised_by, &f.raised_by) {
+                    (Some(a), Some(b)) if !a.split('+').any(|t| t == b) => {
+                        Some(format!("{a}+{b}"))
+                    }
+                    (Some(a), _) => Some(a.clone()),
+                    (None, Some(b)) => Some(b.clone()),
+                    (None, None) => None,
+                };
+                // Prefer the longer rationale (more information).
+                if f.rationale.len() > m.rationale.len() {
+                    m.rationale = f.rationale.clone();
+                }
+                if m.suggestion.is_none() && f.suggestion.is_some() {
+                    m.suggestion = f.suggestion.clone();
+                }
+                found = true;
+                break;
             }
+        }
+        if found {
             continue;
         }
         merged.push(f);
@@ -71,22 +117,6 @@ pub fn dedup_and_rank(findings: Vec<Finding>, opts: SynthOptions) -> Vec<Finding
             .then(a.title.cmp(&b.title))
     });
     merged
-}
-
-fn is_duplicate(a: &Finding, b: &Finding, opts: SynthOptions) -> bool {
-    if a.file != b.file {
-        return false;
-    }
-    let line_ok = match (a.line, b.line) {
-        (Some(la), Some(lb)) => la.abs_diff(lb) <= opts.line_window,
-        // If either side is missing a line, fall back to title similarity
-        // alone (whole-file findings).
-        _ => true,
-    };
-    if !line_ok {
-        return false;
-    }
-    title_jaccard(&a.title, &b.title) >= opts.title_similarity
 }
 
 /// Tokenise a title into a reusable buffer.  Returns the number of tokens.
