@@ -60,6 +60,7 @@ permissions:
 jobs:
   aatxe:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout HEAD
         uses: actions/checkout@v4
@@ -83,11 +84,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install aatxe CLI
-        run: |
-          # In real usage, replace this with a release-asset download.
-          # For now we build from the workflow's own ref.
-          git clone --depth 1 https://github.com/enekos/aatxe /tmp/aatxe
-          cargo install --path /tmp/aatxe/crates/aatxe --locked
+        uses: ./.github/actions/install-aatxe
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Bench HEAD
         env:
@@ -96,12 +95,12 @@ jobs:
           AATXE_RUST_RUNNER: ${{ inputs.runner-cmd }}
         run: |
           if [[ "${{ inputs.affected }}" == "true" ]]; then
-            aatxe run --lang ${{ inputs.lang }} \
+            "$AATXE_BIN" run --lang ${{ inputs.lang }} \
               --service "${{ inputs.service }}" \
               --affected --base "origin/${{ github.base_ref }}" \
               --out /tmp/head.json
           else
-            aatxe run --lang ${{ inputs.lang }} \
+            "$AATXE_BIN" run --lang ${{ inputs.lang }} \
               --service "${{ inputs.service }}" \
               --out /tmp/head.json
           fi
@@ -117,13 +116,13 @@ jobs:
           AATXE_GO_RUNNER: ${{ inputs.runner-cmd }}
           AATXE_RUST_RUNNER: ${{ inputs.runner-cmd }}
         run: |
-          aatxe run --lang ${{ inputs.lang }} \
+          "$AATXE_BIN" run --lang ${{ inputs.lang }} \
             --service "${{ inputs.service }}" \
             --out /tmp/base.json
 
       - name: Compare + render markdown
         run: |
-          aatxe compare \
+          "$AATXE_BIN" compare \
             --base /tmp/base.json --head /tmp/head.json \
             --threshold ${{ inputs.threshold }} \
             --alpha ${{ inputs.alpha }} \
@@ -139,7 +138,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          aatxe comment --report /tmp/aatxe-report.md
+          "$AATXE_BIN" comment --report /tmp/aatxe-report.md
 
       - name: Gate on regressions
         if: steps.compare.outcome == 'failure'

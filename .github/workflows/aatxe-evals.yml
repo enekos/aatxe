@@ -48,6 +48,7 @@ permissions:
 jobs:
   evals:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -141,6 +142,22 @@ jobs:
               echo "=== $f ==="
               head -80 "$f"
               echo
+            fi
+          done
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## Aatxe Evals" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          for f in tmp/aatxe-evals.md tmp/aatxe-evals-real.md; do
+            if [ -f "$f" ]; then
+              echo "<details><summary>$(basename "$f")</summary>" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              head -60 "$f" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              echo "</details>" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
 

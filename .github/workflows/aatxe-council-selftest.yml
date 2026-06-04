@@ -66,6 +66,7 @@ permissions:
 jobs:
   selftest:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -175,6 +176,20 @@ jobs:
 
       - name: Print rendered body (first 120 lines)
         run: head -120 /tmp/council/selftest.md
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## Aatxe Council Selftest" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Mode: ${{ steps.cfg.outputs.mode }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- PR: #${{ steps.cfg.outputs.pr }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "<details><summary>Rendered council output</summary>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```markdown' >> "$GITHUB_STEP_SUMMARY"
+          head -80 /tmp/council/selftest.md >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "</details>" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload selftest artefacts
         if: always()
