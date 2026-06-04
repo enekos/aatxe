@@ -346,7 +346,7 @@ fn parse_one_file(body_without_header_prefix: &str) -> Option<ParsedFile> {
         .or_else(|| paths_from_header(body_without_header_prefix).map(|(_, b)| b))?
         .to_string();
 
-    let mut body = String::with_capacity(13 + body_without_header_prefix.len());
+    let mut body = String::with_capacity(11 + body_without_header_prefix.len());
     body.push_str("diff --git ");
     body.push_str(body_without_header_prefix);
 
