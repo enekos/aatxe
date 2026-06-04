@@ -107,6 +107,8 @@ fn parse_go_test_events(raw: &str, spec: &RunSpec) -> Result<RunReport> {
             p50: s.p50,
             p95: s.p95,
             p99: s.p99,
+            metrics: Vec::new(),
+            tags: Vec::new(),
         });
     }
     runs.sort_by(|a, b| a.name.cmp(&b.name));

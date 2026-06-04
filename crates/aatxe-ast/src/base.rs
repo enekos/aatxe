@@ -126,12 +126,27 @@ pub fn regex_extract(file_path: &str, source: &str) -> FileGraph {
         }
     }
 
+    let imports = extract_imports_naive(source);
+    // The fallback can't tell which language it's reading, so the
+    // file_edges shape is "every import that looks file-edge-shaped" —
+    // i.e. starts with `./` or `../`. That matches what
+    // `aatxe-core::affected::is_relative_spec` accepts for TS/Go/Rust
+    // (Rust's `mod foo;` is handled by the tree-sitter describer; the
+    // fallback only ever runs when the corresponding feature is off, in
+    // which case affected.rs's own regex extractor takes over anyway).
+    let file_edges: Vec<String> = imports
+        .iter()
+        .filter(|s| s.starts_with("./") || s.starts_with("../"))
+        .cloned()
+        .collect();
+
     FileGraph {
         file_summary: format!("{} symbols", symbols.len()),
         raw_content: String::new(),
         symbols,
         edges,
-        imports: extract_imports_naive(source),
+        imports,
+        file_edges,
         symbol_descriptions: HashMap::new(),
     }
 }

@@ -38,12 +38,19 @@ impl LanguageDescriber for GoDescriber {
 
         let edges = call_edges(&symbols, source);
 
+        // For Go, every import path is also a candidate file edge —
+        // `aatxe-core::affected::is_relative_spec` is what filters
+        // module-path imports out at resolution time. Keep the lists in
+        // lock-step so the AST extractor stays drop-in.
+        let file_edges = imports.clone();
+
         FileGraph {
             file_summary: format!("{} symbols", symbols.len()),
             raw_content: String::new(),
             symbols,
             edges,
             imports,
+            file_edges,
             symbol_descriptions: HashMap::new(),
         }
     }
@@ -357,6 +364,23 @@ mod tests {
                 g.imports.iter().any(|s| s == want),
                 "missing {want} in {:?}",
                 g.imports
+            );
+        }
+    }
+
+    #[test]
+    fn file_edges_mirror_imports_for_go() {
+        // Go affected-resolution funnels every import through
+        // `is_relative_spec`, so file_edges contains the same set as
+        // `imports` — the resolver filters down to `./`/`../` itself.
+        let g = describe(
+            "package x\nimport \"fmt\"\nimport \"./shared\"\nimport (\n  \"github.com/x/y\"\n  \"../sibling\"\n)\n",
+        );
+        for want in ["fmt", "./shared", "github.com/x/y", "../sibling"] {
+            assert!(
+                g.file_edges.iter().any(|s| s == want),
+                "missing {want} in file_edges {:?}",
+                g.file_edges
             );
         }
     }

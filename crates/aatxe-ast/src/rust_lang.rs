@@ -33,8 +33,17 @@ impl LanguageDescriber for RustDescriber {
 
         let mut symbols: Vec<LogicSymbol> = Vec::new();
         let mut imports: Vec<String> = Vec::new();
+        let mut file_edges: Vec<String> = Vec::new();
 
-        walk(root, bytes, source, &mut symbols, &mut imports, None);
+        walk(
+            root,
+            bytes,
+            source,
+            &mut symbols,
+            &mut imports,
+            &mut file_edges,
+            None,
+        );
 
         let edges = call_edges(&symbols, source);
 
@@ -44,6 +53,7 @@ impl LanguageDescriber for RustDescriber {
             symbols,
             edges,
             imports,
+            file_edges,
             symbol_descriptions: HashMap::new(),
         }
     }
@@ -55,6 +65,7 @@ fn walk(
     source: &str,
     out: &mut Vec<LogicSymbol>,
     imports: &mut Vec<String>,
+    file_edges: &mut Vec<String>,
     impl_owner: Option<&str>,
 ) {
     let kind = node.kind();
@@ -112,7 +123,7 @@ fn walk(
                 .or_else(|| field_text(node, "trait", bytes).map(|s| s.to_string()))
                 .unwrap_or_else(|| "impl".to_string());
             for child in named_children(node) {
-                walk(child, bytes, source, out, imports, Some(&owner));
+                walk(child, bytes, source, out, imports, file_edges, Some(&owner));
             }
             return;
         }
@@ -141,20 +152,128 @@ fn walk(
             }
         }
         "mod_item" => {
-            // Inline module — recurse with the same owner context. Don't
-            // emit a symbol for the module itself; the reviewer cares
-            // about the functions inside.
             if let Some(body) = node.child_by_field_name("body") {
+                // Inline module — recurse with the same owner context.
+                // Don't emit a symbol for the module itself; the reviewer
+                // cares about the functions inside.
                 for child in named_children(body) {
-                    walk(child, bytes, source, out, imports, impl_owner);
+                    walk(child, bytes, source, out, imports, file_edges, impl_owner);
+                }
+            } else if let Some(name) = field_text(node, "name", bytes) {
+                // Non-inline `mod foo;` — emit a file edge. If a sibling
+                // `#[path = "…"]` attribute precedes the mod_item, the
+                // attribute overrides where `foo` lives on disk; capture
+                // that synthetic specifier in lieu of `./{name}`.
+                let edge = path_attr_before(node, bytes)
+                    .map(|p| prefix_relative(&p))
+                    .unwrap_or_else(|| format!("./{name}"));
+                if !file_edges.iter().any(|s| s == &edge) {
+                    file_edges.push(edge);
                 }
             }
             return;
         }
+        "macro_invocation" => {
+            // `include!("path.rs")` — file-local. Resolve relative to the
+            // current source file via the synthetic `./` prefix.
+            //
+            // The tree-sitter-rust grammar's "macro" field can return
+            // either `include` or `include!` depending on grammar
+            // version; check both.
+            let macro_name = field_text(node, "macro", bytes).unwrap_or("");
+            if macro_name == "include" || macro_name == "include!" {
+                if let Some(arg) = include_arg(node, bytes) {
+                    let edge = prefix_relative(&arg);
+                    if !file_edges.iter().any(|s| s == &edge) {
+                        file_edges.push(edge);
+                    }
+                }
+            }
+        }
         _ => {}
     }
     for child in named_children(node) {
-        walk(child, bytes, source, out, imports, impl_owner);
+        walk(child, bytes, source, out, imports, file_edges, impl_owner);
+    }
+}
+
+/// `#[path = "alt/d.rs"]` immediately above a `mod_item` — returns the
+/// quoted path, or None if no such attribute is attached.
+fn path_attr_before<'a>(mod_node: Node<'a>, bytes: &'a [u8]) -> Option<String> {
+    let parent = mod_node.parent()?;
+    let mut prev: Option<Node<'a>> = None;
+    let mut cursor = parent.walk();
+    for sibling in parent.named_children(&mut cursor) {
+        if sibling.id() == mod_node.id() {
+            break;
+        }
+        prev = Some(sibling);
+    }
+    let attr = prev?;
+    if attr.kind() != "attribute_item" {
+        return None;
+    }
+    // `#[path = "alt/d.rs"]` is `attribute_item(attribute(identifier "path" =
+    // string_literal))`. Pull the string literal out and unquote it.
+    let text = attr.utf8_text(bytes).ok()?;
+    let after_eq = text.split_once('=')?.1;
+    let trimmed = after_eq.trim().trim_end_matches(']').trim();
+    let unquoted = trimmed.trim_start_matches('"').trim_end_matches('"');
+    if text.contains("path") && !unquoted.is_empty() {
+        Some(unquoted.to_string())
+    } else {
+        None
+    }
+}
+
+/// Extract the first string-literal argument of an `include!(...)`
+/// macro_invocation, with the surrounding quotes stripped. tree-sitter-
+/// rust's `macro_invocation` carries the bracketed body as a `token_tree`
+/// sibling rather than via a named field — walk the whole subtree
+/// looking for the first `string_literal` and pull its inner text.
+fn include_arg<'a>(node: Node<'a>, bytes: &'a [u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    if !cursor.goto_first_child() {
+        return None;
+    }
+    loop {
+        let child = cursor.node();
+        if child.kind() == "string_literal" {
+            // tree-sitter-rust wraps the string body in a `string_content`
+            // inner node; fall back to the raw text and trim quotes if
+            // the inner node isn't present.
+            if let Some(inner) = child.named_child(0) {
+                if let Ok(text) = inner.utf8_text(bytes) {
+                    if !text.is_empty() {
+                        return Some(text.to_string());
+                    }
+                }
+            }
+            if let Ok(text) = child.utf8_text(bytes) {
+                return Some(text.trim_matches('"').to_string());
+            }
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() || cursor.node().id() == node.id() {
+                return None;
+            }
+        }
+    }
+}
+
+/// Prefix a bare path with `./` so it round-trips through
+/// `aatxe-core::affected::is_relative_spec` and `resolve_import`.
+fn prefix_relative(p: &str) -> String {
+    if p.starts_with("./") || p.starts_with("../") || p.starts_with('/') {
+        p.to_string()
+    } else {
+        format!("./{p}")
     }
 }
 
@@ -375,6 +494,40 @@ mod tests {
         }
         assert!(g.symbols.iter().find(|s| s.name == "A").unwrap().exported);
         assert!(!g.symbols.iter().find(|s| s.name == "B").unwrap().exported);
+    }
+
+    #[test]
+    fn mod_declarations_become_file_edges() {
+        let g = describe(
+            "pub mod a;\nmod b;\npub(crate) mod c;\n#[path = \"alt/d.rs\"]\nmod d;\nfn _x() { include!(\"./table.rs\"); }\n",
+        );
+        // Same shape as aatxe-core::affected::extract_specifiers — `./{name}`
+        // synthetic prefix so resolve_import can walk these.
+        assert!(g.file_edges.iter().any(|s| s == "./a"));
+        assert!(g.file_edges.iter().any(|s| s == "./b"));
+        assert!(g.file_edges.iter().any(|s| s == "./c"));
+        // `#[path = "alt/d.rs"]` overrides the synthetic `./d` with the
+        // attribute body, prefix-normalised.
+        assert!(
+            g.file_edges.iter().any(|s| s == "./alt/d.rs"),
+            "got: {:?}",
+            g.file_edges
+        );
+        // include!() is file-local.
+        assert!(g.file_edges.iter().any(|s| s == "./table.rs"));
+        // Inline `mod foo { ... }` must NOT emit a file edge — it has a body.
+        let g2 = describe("mod inline { pub fn x() {} }\n");
+        assert!(g2.file_edges.is_empty(), "got: {:?}", g2.file_edges);
+    }
+
+    #[test]
+    fn use_declarations_do_not_pollute_file_edges() {
+        // `use` paths address symbols, not files — they must stay in
+        // `imports` and stay out of `file_edges`, so the affected-set
+        // resolver doesn't try to walk them as relative file specifiers.
+        let g = describe("use crate::types::FileGraph;\nuse std::collections::HashMap;\n");
+        assert!(g.file_edges.is_empty(), "got: {:?}", g.file_edges);
+        assert!(!g.imports.is_empty());
     }
 
     #[test]

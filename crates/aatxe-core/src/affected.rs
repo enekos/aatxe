@@ -4,9 +4,16 @@
 //! intersects each bench's closure with the diff. A bench is "affected" iff
 //! itself or any reachable file appears in the diff.
 //!
-//! Per-language import parsers are kept deliberately minimal — they are
-//! regex-based, follow only static imports, and treat external dependencies
-//! as leaves. The escape hatch for misses is [`AffectedOptions::extra_changed_files`]
+//! Per-language import parsers come in two flavours: the in-crate regex
+//! pass ([`RegexImportExtractor`], the default), and the AST-based
+//! extractor in the CLI binary (`aatxe_ast::FileGraph::file_edges`),
+//! plumbed through [`AffectedOptions::import_extractor`]. The AST pass
+//! is language-correct (no string/comment false positives, captures
+//! TS `export … from` re-exports + dynamic `import()` + Rust `mod foo;`
+//! declarations) and stays in the CLI so `aatxe-core` keeps its
+//! zero-dep, pure-logic shape. The regex path is the always-on fallback
+//! the existing test surface still pins against. The escape hatch for
+//! misses in either path is [`AffectedOptions::extra_changed_files`]
 //! (e.g. when CI knows about a config change the parser can't see).
 //!
 //! ## Why three-dot diff
@@ -50,6 +57,36 @@ pub struct AffectedOptions<'a> {
     pub extra_changed_files: Vec<String>,
     pub git: &'a dyn GitRunner,
     pub fs: &'a dyn Fs,
+    /// Per-language import extractor used to derive file edges from a
+    /// source string. `None` ⇒ in-crate regex pass (the default, kept
+    /// for backwards-compatibility with every existing call site).
+    /// The CLI passes an AST-backed extractor that uses tree-sitter to
+    /// extract the same shape language-correctly.
+    pub import_extractor: Option<&'a dyn ImportExtractor>,
+}
+
+/// Pluggable source for "what file-edge specifiers does this source
+/// contain". Implemented by [`RegexImportExtractor`] (the default) and,
+/// in the CLI binary, by a wrapper around `aatxe_ast::describe(...)`.
+///
+/// The returned strings live in the same shape as [`extract_specifiers`]
+/// (e.g. `./foo`, `./alt/d.rs`, `./shared`); [`resolve_import`] is what
+/// turns each into one or more on-disk paths and is shared across both
+/// implementations.
+pub trait ImportExtractor {
+    fn extract(&self, src: &str, lang: Language) -> Vec<String>;
+}
+
+/// The default in-crate extractor — delegates to [`extract_specifiers`].
+///
+/// Kept as a named type so the CLI can build an [`AffectedOptions`] that
+/// re-uses the default without re-implementing the trait on the fly.
+pub struct RegexImportExtractor;
+
+impl ImportExtractor for RegexImportExtractor {
+    fn extract(&self, src: &str, lang: Language) -> Vec<String> {
+        extract_specifiers(src, lang)
+    }
 }
 
 /// Output of [`resolve_affected`].
@@ -109,9 +146,15 @@ pub fn resolve_affected(opts: &AffectedOptions<'_>) -> Result<AffectedSet, Affec
         .map(|f| normalize_path(&repo_root.join(f)))
         .collect();
 
+    let default_extractor = RegexImportExtractor;
+    let extractor: &dyn ImportExtractor = match opts.import_extractor {
+        Some(e) => e,
+        None => &default_extractor,
+    };
+
     let mut bench_files: Vec<PathBuf> = Vec::new();
     for bench in &all_bench_files {
-        let reachable = collect_reachable(bench, opts.language, opts.fs);
+        let reachable = collect_reachable_with(bench, opts.language, opts.fs, extractor);
         if reachable.iter().any(|f| changed_abs.contains(f)) {
             bench_files.push(bench.clone());
         }
@@ -181,8 +224,26 @@ fn walk(
 // --- import graph ---
 
 /// Walk imports/exports/uses transitively from `entry` and return every
-/// reachable absolute path. The entry file is always included.
+/// reachable absolute path, using the default regex extractor.
+///
+/// Kept for backwards compatibility with the existing test surface and
+/// the (few) external call sites. New code should call
+/// [`collect_reachable_with`] and pass an explicit extractor — the CLI
+/// uses that path to inject an AST-based extractor.
 pub fn collect_reachable(entry: &Path, lang: Language, fs: &dyn Fs) -> HashSet<PathBuf> {
+    collect_reachable_with(entry, lang, fs, &RegexImportExtractor)
+}
+
+/// Same as [`collect_reachable`], but with a caller-supplied
+/// [`ImportExtractor`]. The CLI binary passes the AST-backed extractor;
+/// callers without access to `aatxe-ast` (and the tests) pass
+/// [`RegexImportExtractor`].
+pub fn collect_reachable_with(
+    entry: &Path,
+    lang: Language,
+    fs: &dyn Fs,
+    extractor: &dyn ImportExtractor,
+) -> HashSet<PathBuf> {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut stack: Vec<PathBuf> = vec![normalize_path(entry)];
     while let Some(file) = stack.pop() {
@@ -193,7 +254,7 @@ pub fn collect_reachable(entry: &Path, lang: Language, fs: &dyn Fs) -> HashSet<P
             Ok(s) => s,
             Err(_) => continue,
         };
-        let specifiers = extract_specifiers(&src, lang);
+        let specifiers = extractor.extract(&src, lang);
         let from_dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
         for spec in specifiers {
             if !is_relative_spec(&spec, lang) {

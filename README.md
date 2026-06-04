@@ -433,7 +433,25 @@ AATXE_FLOORS="0.55 0.60 0.65" make evals-calibrate
 
 Real-LLM calibration is gated behind `USE_REAL_KIMI=true` (it takes
 ~60 min per floor) — use it when promoting a floor that the stub
-sweep proves is worth measuring against the real backend.
+sweep proves is worth measuring against the real backend. Either way,
+the script's last step re-runs the eval gate at the default floor
+against the committed baseline, so a sweep that lowers the headline
+metric past tolerance still trips exit 2:
+
+```bash
+# Local — stub sweep, finishes in <30s
+make evals-calibrate
+
+# Local — real Kimi, ~60min/floor, requires KIMI_API_KEY
+make evals-calibrate-real
+
+# CI — workflow_dispatch on `aatxe-evals.yml` with calibrate=true
+# (and optionally use-real-kimi=true to do the slow path on GH runners)
+```
+
+Promote a new default by editing the `--confidence-floor` default in
+`crates/aatxe/src/cli.rs` and re-running `make evals-update-baseline`
+to lock the headline metric in.
 
 ### Stub mode (offline / CI smoke test)
 
@@ -545,6 +563,23 @@ runs on every PR in stub mode and uploads the JSON + markdown summary
 as an artefact. To measure real-Kimi quality, dispatch the workflow
 manually with `use-real-kimi=true` (requires a `KIMI_API_KEY` repo
 secret).
+
+### Real-LLM baselines
+
+Real-LLM measurements are kept side-by-side with the stub baseline, one
+file per backend:
+
+| backend | corpus | cases recalled | critical recall | critical F1 | FP / case | avg latency | file |
+|---|---:|---:|---:|---:|---:|---:|---|
+| pi-proxy (Kimi K2-thinking, tools on) | 15 cases | 9/15 | 0.286 | 0.444 | 2.27 | 250 s | [`real-pi.json`](evals/council/baselines/real-pi.json) |
+| claude-code (Sonnet, OAuth) | 24 cases | 12/24 | 0.750 | 0.857 | 2.38 | 26 s | [`real-claude.json`](evals/council/baselines/real-claude.json) |
+
+These are kept as **quality benchmarks**, not deterministic gates —
+real-LLM output is non-deterministic, so the stub remains the CI gate
+and these files move only on intentional improvements. The corpus
+expanded 15 → 24 cases between the two runs, so the headlines aren't
+strictly comparable; the **9× critical-recall lift and 10× latency
+drop** on the larger corpus is what the backend swap actually buys.
 
 ### What the metrics mean
 

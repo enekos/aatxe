@@ -28,6 +28,8 @@ fn mk_run(name: &str, file: &str, samples: Vec<f64>) -> BenchRun {
         p50: s.p50,
         p95: s.p95,
         p99: s.p99,
+        metrics: Vec::new(),
+        tags: Vec::new(),
     }
 }
 
@@ -257,6 +259,8 @@ fn schema_v1_legacy_report_is_normalised() {
         p50: 0.0,
         p95: 0.0,
         p99: 0.0,
+        metrics: Vec::new(),
+        tags: Vec::new(),
     };
     let base_samples: Vec<f64> = (100..160).map(|x| x as f64).collect();
     let head_samples: Vec<f64> = base_samples.iter().map(|x| x * 1.3).collect();

@@ -136,3 +136,12 @@ test('summarizeSamples computes p99 distinct from p95 on a long tail', () => {
   assert.ok(s.p95 < s.p99, `p95=${s.p95} not less than p99=${s.p99}`)
   assert.ok(s.median < s.p95, `median should be << p95 on this tail`)
 })
+
+test('only flag is preserved on the resolved bench', () => {
+  _internal.clear()
+  bench('a', () => undefined)
+  bench('b', () => undefined, { only: true })
+  const list = _internal.list()
+  assert.equal(list[0]!.options.only, false)
+  assert.equal(list[1]!.options.only, true)
+})

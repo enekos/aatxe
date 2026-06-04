@@ -117,6 +117,8 @@ jobs:
     name: publish release
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -146,3 +148,93 @@ jobs:
           files: |
             dist/aatxe-*.tar.gz
             dist/aatxe-*.tar.gz.sha256
+
+  # SDK publishing rides on the same tag as the binary release. Each
+  # sub-job is gated on the relevant secret being set so a tag push
+  # without credentials still produces the GH Release + binaries, just
+  # without the npm / crates.io artefacts. Each registry's auth token
+  # is provisioned manually under repo secrets:
+  #   NPM_TOKEN              — automation token from npmjs.com
+  #   CARGO_REGISTRY_TOKEN   — publish-scoped token from crates.io
+  publish-npm:
+    name: publish @aatxe/bench to npm
+    needs: release
+    if: ${{ needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check NPM_TOKEN presence
+        id: gate
+        env:
+          HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+        run: echo "go=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.go == 'true'
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: install + build + publish
+        if: steps.gate.outputs.go == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: sdk/ts
+        run: |
+          npm install --no-audit --no-fund
+          # `prepublishOnly` already runs the TS build; calling it here
+          # too gives a clean failure ahead of `npm publish` so we don't
+          # eat the registry-side error message.
+          npm run build
+          # `--access public` is also in publishConfig, but pass it
+          # explicitly so the intent is visible on the publish line.
+          npm publish --access public
+
+      - name: skipped (no NPM_TOKEN)
+        if: steps.gate.outputs.go != 'true'
+        run: echo "    → NPM_TOKEN not set; skipping npm publish for ${{ needs.release.outputs.tag }}"
+
+  publish-crates:
+    name: publish aatxe-core + aatxe-bench to crates.io
+    needs: release
+    if: ${{ needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check CARGO_REGISTRY_TOKEN presence
+        id: gate
+        env:
+          HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+        run: echo "go=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.gate.outputs.go == 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.gate.outputs.go == 'true'
+
+      # Publish order matters: `aatxe-bench` depends on `aatxe-core`
+      # via `version = "0.1"`, so the core crate must be on the
+      # registry first. `cargo publish` itself queues for a few seconds
+      # before the new version is resolvable; the explicit sleep is
+      # cheap insurance against the registry lag racing the second
+      # publish.
+      - name: publish aatxe-core
+        if: steps.gate.outputs.go == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p aatxe-core
+
+      - name: wait for crates.io to surface aatxe-core
+        if: steps.gate.outputs.go == 'true'
+        run: sleep 30
+
+      - name: publish aatxe-bench
+        if: steps.gate.outputs.go == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p aatxe-bench
+
+      - name: skipped (no CARGO_REGISTRY_TOKEN)
+        if: steps.gate.outputs.go != 'true'
+        run: echo "    → CARGO_REGISTRY_TOKEN not set; skipping crates.io publish for ${{ needs.release.outputs.tag }}"
