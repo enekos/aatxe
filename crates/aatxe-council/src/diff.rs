@@ -14,6 +14,7 @@
 //!    things that are intentional artefacts of the generator.
 
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 
 /// Default filename-and-glob blocklist applied before the council runs.
 /// Matching is on the full POSIX-style repo-relative path, OR on the path
@@ -450,7 +451,7 @@ where
 /// elided.
 pub fn filter_ignored(files: Vec<ParsedFile>, patterns: &[&str]) -> (Vec<ParsedFile>, Vec<String>) {
     let mut kept = Vec::with_capacity(files.len());
-    let mut dropped = Vec::new();
+    let mut dropped = Vec::with_capacity(files.len() / 4);
     for f in files {
         if is_ignored(&f.path, patterns) {
             dropped.push(f.path);
@@ -669,7 +670,12 @@ fn truncate_body(body: &str, max_bytes: usize) -> String {
     let head = &body[..head_end];
     let tail = &body[tail_start..];
     let elided = body.len() - head.len() - tail.len();
-    format!("{head}\n... [truncated {elided} bytes — file too large] ...\n{tail}")
+    let mut s = String::with_capacity(head.len() + tail.len() + 64);
+    let _ = write!(
+        s,
+        "{head}\n... [truncated {elided} bytes — file too large] ...\n{tail}"
+    );
+    s
 }
 
 #[cfg(test)]
