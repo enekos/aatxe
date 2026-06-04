@@ -73,22 +73,15 @@ jobs:
   council-with-learning:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout HEAD
         uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry + build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ${{ runner.temp }}/aatxe-src
-
       - name: Install aatxe CLI
-        run: |
-          git clone --depth 1 https://github.com/enekos/aatxe "${RUNNER_TEMP}/aatxe-src"
-          cargo install --path "${RUNNER_TEMP}/aatxe-src/crates/aatxe" --locked
+        uses: ./.github/actions/install-aatxe
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # Download the previous corpus artifact if one exists. The
       # download-artifact action's `merge-multiple` + `pattern` semantics
@@ -122,7 +115,7 @@ jobs:
           if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
             gate="--fail-on-critical"
           fi
-          aatxe council \
+          "$AATXE_BIN" council \
             --pr ${{ github.event.pull_request.number }} \
             --model "${{ inputs.model }}" \
             --confidence-floor "${{ inputs.confidence-floor }}" \
@@ -137,7 +130,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          aatxe learn harvest \
+          "$AATXE_BIN" learn harvest \
             --corpus .aatxe/aatxe-learning-corpus.json \
             --pr ${{ github.event.pull_request.number }} \
             --council-report .aatxe/aatxe-council.json \
@@ -145,7 +138,7 @@ jobs:
             --min-score "${{ inputs.learning-min-score }}"
 
       - name: Show updated corpus
-        run: aatxe learn show --corpus .aatxe/aatxe-learning-corpus.json
+        run: "$AATXE_BIN" learn show --corpus .aatxe/aatxe-learning-corpus.json
 
       - name: Upload updated learning corpus
         uses: actions/upload-artifact@v4

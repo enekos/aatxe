@@ -60,22 +60,15 @@ jobs:
   council:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout HEAD
         uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry + build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ${{ runner.temp }}/aatxe-src
-
       - name: Install aatxe CLI
-        run: |
-          git clone --depth 1 https://github.com/enekos/aatxe "${RUNNER_TEMP}/aatxe-src"
-          cargo install --path "${RUNNER_TEMP}/aatxe-src/crates/aatxe" --locked
+        uses: ./.github/actions/install-aatxe
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Assemble --ignore flags
         id: ignores
@@ -99,7 +92,7 @@ jobs:
           if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
             gate="--fail-on-critical"
           fi
-          aatxe council \
+          "$AATXE_BIN" council \
             --pr ${{ github.event.pull_request.number }} \
             --model "${{ inputs.model }}" \
             --confidence-floor "${{ inputs.confidence-floor }}" \

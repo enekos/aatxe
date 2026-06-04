@@ -1,0 +1,139 @@
+name: 'Install aatxe CLI'
+description: >
+  Install the aatxe CLI binary. Tries a GitHub Release asset first
+  (fast, ~2 s), falls back to building from source (~2 min).
+  Produces $AATXE_BIN pointing at the installed binary.
+
+inputs:
+  version:
+    description: 'Release version to install (e.g. v0.1.0). "latest" resolves the newest release.'
+    required: false
+    default: 'latest'
+  repo:
+    description: 'GitHub owner/repo to fetch releases from.'
+    required: false
+    default: 'enekos/aatxe'
+  token:
+    description: 'GITHUB_TOKEN for release API / download auth.'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  bin:
+    description: 'Absolute path to the installed aatxe binary'
+    value: ${{ steps.resolve.outputs.bin }}
+  source:
+    description: 'Either "release" or "compile"'
+    value: ${{ steps.resolve.outputs.source }}
+  version:
+    description: 'Resolved version string'
+    value: ${{ steps.resolve.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve version + target
+      id: meta
+      shell: bash
+      run: |
+        version="${{ inputs.version }}"
+        if [ "$version" = "latest" ]; then
+          version=""
+        fi
+
+        # Map runner OS/arch to Rust target triple.
+        case "$RUNNER_OS" in
+          Linux)
+            case "$RUNNER_ARCH" in
+              X64)   target="x86_64-unknown-linux-gnu" ;;
+              ARM64) target="aarch64-unknown-linux-gnu" ;;
+            esac
+            ;;
+          macOS)
+            case "$RUNNER_ARCH" in
+              X64)   target="x86_64-apple-darwin" ;;
+              ARM64) target="aarch64-apple-darwin" ;;
+            esac
+            ;;
+        esac
+
+        if [ -z "$target" ]; then
+          echo "    → no prebuilt for $RUNNER_OS/$RUNNER_ARCH; will compile"
+        fi
+
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "target=$target"   >> "$GITHUB_OUTPUT"
+
+    - name: Try release binary
+      id: release
+      if: steps.meta.outputs.target != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        target="${{ steps.meta.outputs.target }}"
+        version="${{ steps.meta.outputs.version }}"
+        asset="aatxe-${target}.tar.gz"
+        tmp="$(mktemp -d)"
+
+        repo="${{ inputs.repo }}"
+        if [ -n "$version" ]; then
+          url="https://github.com/${repo}/releases/download/${version}/${asset}"
+        else
+          # Resolve latest release via GitHub API.
+          api_url="https://api.github.com/repos/${repo}/releases/latest"
+          url=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$api_url" \
+            | jq -r --arg asset "$asset" '.assets[] | select(.name == $asset) | .browser_download_url')
+        fi
+
+        if [ -z "$url" ] || [ "$url" = "null" ]; then
+          echo "    → no release asset found for ${asset}"
+          exit 1
+        fi
+
+        echo "    → downloading ${asset}"
+        curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o "${tmp}/${asset}" "$url"
+        tar -C "$tmp" -xzf "${tmp}/${asset}"
+
+        # The archive contains an `aatxe/` folder with the binary inside.
+        if [ -f "${tmp}/aatxe/aatxe" ]; then
+          chmod +x "${tmp}/aatxe/aatxe"
+          echo "bin=${tmp}/aatxe/aatxe" >> "$GITHUB_OUTPUT"
+          echo "    → installed from release"
+        else
+          echo "    → archive layout unexpected; falling back to compile"
+          exit 1
+        fi
+
+    - name: Compile from source
+      id: compile
+      if: steps.release.outcome == 'failure' || steps.meta.outputs.target == ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        src="${RUNNER_TEMP}/aatxe-src"
+        rm -rf "$src"
+        git clone --depth 1 "https://github.com/${{ inputs.repo }}" "$src"
+        cargo install --path "$src/crates/aatxe" --locked --root "${RUNNER_TEMP}/aatxe-root"
+        echo "bin=${RUNNER_TEMP}/aatxe-root/bin/aatxe" >> "$GITHUB_OUTPUT"
+        echo "    → installed from source"
+
+    - name: Resolve final path
+      id: resolve
+      shell: bash
+      run: |
+        if [ -n "${{ steps.release.outputs.bin }}" ]; then
+          bin="${{ steps.release.outputs.bin }}"
+          source="release"
+        else
+          bin="${{ steps.compile.outputs.bin }}"
+          source="compile"
+        fi
+        # Sanity check.
+        "$bin" --version || { echo "✗ binary failed --version"; exit 1; }
+        echo "bin=$bin"         >> "$GITHUB_OUTPUT"
+        echo "source=$source"   >> "$GITHUB_OUTPUT"
+        echo "version=$("$bin" --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+        echo "AATXE_BIN=$bin"   >> "$GITHUB_ENV"
+        echo "    → aatxe at $bin (source=$source)"
