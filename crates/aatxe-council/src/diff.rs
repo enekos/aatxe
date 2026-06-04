@@ -354,7 +354,8 @@ fn strip_git_prefix(s: &str) -> &str {
 /// itself, used when `---`/`+++` are missing (binary, mode-only).
 /// `body` is the file slice *without* the leading `diff --git ` prefix.
 fn paths_from_header(body: &str) -> Option<(&str, &str)> {
-    let first = body.split('\n').next()?;
+    let newline = body.find('\n')?;
+    let first = &body[..newline];
     // first is like "a/X b/Y" (no "diff --git " prefix)
     let sep = first.find(" b/")?;
     let a = first[..sep].strip_prefix("a/").unwrap_or(&first[..sep]);
@@ -579,9 +580,12 @@ pub fn chunk_for_review_owned(
         let projected = cur_body.len() + f_trunc.body.len() + 1;
         if !cur_files.is_empty() && projected > policy.max_chunk_bytes {
             chunks.push(DiffChunk {
-                files: std::mem::take(&mut cur_files),
+                files: std::mem::replace(&mut cur_files, Vec::with_capacity(32)),
                 bytes: cur_body.len(),
-                body: std::mem::take(&mut cur_body),
+                body: std::mem::replace(
+                    &mut cur_body,
+                    String::with_capacity(policy.max_chunk_bytes),
+                ),
                 related: pack_related(related, policy),
             });
             cur_context_bytes = 0;
