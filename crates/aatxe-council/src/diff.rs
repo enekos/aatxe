@@ -382,7 +382,7 @@ pub fn is_ignored(path: &str, patterns: &[&str]) -> bool {
                     }
                 }
             }
-            if path.contains(&format!("/{dir}/")) {
+            if path.split('/').any(|c| c == dir) {
                 return true;
             }
         } else if pat.starts_with('.') {
