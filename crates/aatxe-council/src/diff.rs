@@ -277,10 +277,12 @@ fn parse_one_file(body_without_header_prefix: &str) -> Option<ParsedFile> {
 
     for line in body_without_header_prefix.split('\n') {
         if saw_hunk {
-            if line.starts_with('+') && !line.starts_with("+++") {
-                additions += 1;
-            } else if line.starts_with('-') && !line.starts_with("---") {
-                deletions += 1;
+            // Byte-level fast path: once inside a hunk, `+` / `-` are
+            // unambiguous (the `+++` / `---` header lines never appear here).
+            match line.as_bytes().first() {
+                Some(b'+') => additions += 1,
+                Some(b'-') => deletions += 1,
+                _ => {}
             }
             continue;
         }
@@ -539,7 +541,7 @@ pub fn chunk_for_review_owned(
 ) -> Vec<DiffChunk> {
     let mut chunks: Vec<DiffChunk> = Vec::new();
     let mut cur_files: Vec<ParsedFile> = Vec::new();
-    let mut cur_body = String::new();
+    let mut cur_body = String::with_capacity(policy.max_chunk_bytes);
     let mut cur_context_bytes: usize = 0;
 
     for mut f in files {
