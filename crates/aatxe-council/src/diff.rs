@@ -270,22 +270,18 @@ fn parse_one_file(body_without_header_prefix: &str) -> Option<ParsedFile> {
     let mut is_new = false;
     let mut is_deleted = false;
     let mut is_pure_rename = false;
-    let mut additions: u32 = 0;
-    let mut deletions: u32 = 0;
-    let mut saw_hunk = false;
     let mut saw_combined = false;
 
-    for line in body_without_header_prefix.split('\n') {
-        if saw_hunk {
-            // Byte-level fast path: once inside a hunk, `+` / `-` are
-            // unambiguous (the `+++` / `---` header lines never appear here).
-            match line.as_bytes().first() {
-                Some(b'+') => additions += 1,
-                Some(b'-') => deletions += 1,
-                _ => {}
-            }
-            continue;
-        }
+    // Find the first hunk header (@@) so we can split metadata scanning
+    // from hunk counting.  The fast byte-scan for +/- avoids the
+    // per-line iterator overhead that dominates for large hunks.
+    let hunk_start = body_without_header_prefix.find("\n@@");
+    let header = match hunk_start {
+        Some(pos) => &body_without_header_prefix[..pos],
+        None => body_without_header_prefix,
+    };
+
+    for line in header.split('\n') {
         if line.starts_with("diff --cc ") || line.starts_with("diff --combined ") {
             saw_combined = true;
             break;
@@ -306,19 +302,43 @@ fn parse_one_file(body_without_header_prefix: &str) -> Option<ParsedFile> {
             is_deleted = true;
         } else if line.starts_with("rename from ") || line.starts_with("rename to ") {
             is_pure_rename = true;
-        } else if line.starts_with("@@") {
-            saw_hunk = true;
+        }
+    }
+
+    let (mut additions, mut deletions) = (0u32, 0u32);
+    if let Some(pos) = hunk_start {
+        // Fast byte-scan of the hunk body: count lines starting with '+' or '-'.
+        // The slice starts at the '\n' before @@, so we skip that newline
+        // and then look for every subsequent newline followed by +/-.
+        let hunk_body = &body_without_header_prefix[pos + 1..];
+        let bytes = hunk_body.as_bytes();
+        // First line of the hunk body is the @@ header itself; the first
+        // real diff line could start right at the beginning if the body
+        // somehow lacks the @@ line (shouldn't happen for valid diffs).
+        // We start scanning from the first character and treat every
+        // newline+sign as a count.
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'\n' && i + 1 < bytes.len() {
+                match bytes[i + 1] {
+                    b'+' => additions += 1,
+                    b'-' => deletions += 1,
+                    _ => {}
+                }
+            }
+            i += 1;
         }
     }
     if saw_combined {
         return None;
     }
-    if !saw_hunk && !is_pure_rename {
+    let has_hunk = hunk_start.is_some();
+    if !has_hunk && !is_pure_rename {
         // No hunks and not a rename: try harder — could be binary or
         // mode-only. We still emit it (path-filtering may drop it).
         // Fall through with path set from header.
     }
-    if saw_hunk {
+    if has_hunk {
         is_pure_rename = false;
     }
     let path = path
