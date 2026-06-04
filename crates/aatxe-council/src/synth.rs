@@ -132,6 +132,9 @@ fn tokenise<'a>(s: &'a str, buf: &mut Vec<&'a str>) -> usize {
 }
 
 fn title_jaccard(a: &str, b: &str) -> f64 {
+    if a == b {
+        return 1.0;
+    }
     let mut buf_a: Vec<&str> = Vec::with_capacity(16);
     let mut buf_b: Vec<&str> = Vec::with_capacity(16);
     let n_a = tokenise(a, &mut buf_a);
