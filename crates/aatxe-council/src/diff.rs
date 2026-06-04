@@ -234,11 +234,17 @@ pub fn parse_unified_diff(text: &str) -> Vec<ParsedFile> {
     // Cap at 8 threads: on Apple Silicon (and many x86 laptops) more threads
     // just increase scheduler overhead without adding real parallelism, and
     // may land work on efficiency cores which are slower for CPU-bound tasks.
-    let n_threads = std::thread::available_parallelism()
-        .map(|n| n.get().min(8))
-        .unwrap_or(1)
-        .min(pieces.len())
-        .max(1);
+    // For small diffs thread spawn overhead dominates parallelism gains.
+    // Threshold at ~100 files: below that, sequential parsing is faster.
+    let n_threads = if pieces.len() < 100 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|n| n.get().min(8))
+            .unwrap_or(1)
+            .min(pieces.len())
+            .max(1)
+    };
     if n_threads == 1 {
         pieces.into_iter().filter_map(parse_one_file).collect()
     } else {
@@ -273,9 +279,7 @@ fn parse_one_file(body_without_header_prefix: &str) -> Option<ParsedFile> {
     let mut is_pure_rename = false;
     let mut saw_combined = false;
 
-    // Find the first hunk header (@@) so we can split metadata scanning
-    // from hunk counting.  The fast byte-scan for +/- avoids the
-    // per-line iterator overhead that dominates for large hunks.
+    let (mut additions, mut deletions) = (0u32, 0u32);
     let hunk_start = body_without_header_prefix.find("\n@@");
     let header = match hunk_start {
         Some(pos) => &body_without_header_prefix[..pos],
@@ -306,18 +310,9 @@ fn parse_one_file(body_without_header_prefix: &str) -> Option<ParsedFile> {
         }
     }
 
-    let (mut additions, mut deletions) = (0u32, 0u32);
     if let Some(pos) = hunk_start {
-        // Fast byte-scan of the hunk body: count lines starting with '+' or '-'.
-        // The slice starts at the '\n' before @@, so we skip that newline
-        // and then look for every subsequent newline followed by +/-.
         let hunk_body = &body_without_header_prefix[pos + 1..];
         let bytes = hunk_body.as_bytes();
-        // First line of the hunk body is the @@ header itself; the first
-        // real diff line could start right at the beginning if the body
-        // somehow lacks the @@ line (shouldn't happen for valid diffs).
-        // We start scanning from the first character and treat every
-        // newline+sign as a count.
         let mut i = 0;
         while i < bytes.len() {
             if bytes[i] == b'\n' && i + 1 < bytes.len() {
