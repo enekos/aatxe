@@ -173,6 +173,40 @@ council-bench-self: council-bench ## Compare the council bench against itself �
 	    && echo "    ✓ council-bench-self: sticky marker present" \
 	    || (echo "    ✗ council-bench-self: sticky marker missing"; exit 1)
 
+# ----------------------------------------------------------------------------
+# Local perf-vs workflow
+# ----------------------------------------------------------------------------
+#
+# `aatxe perf-vs` materializes a sibling worktree at a target ref, runs
+# the chosen bench in both HEAD and that worktree, and pipes both
+# `RunReport`s through the same comparator the CI gate uses. The
+# worktree lives at `../aatxe-worktrees/<sha-short>` by default and is
+# reused between runs so the cargo cache stays warm.
+#
+# Knobs (all optional):
+#   REF       — ref to compare HEAD against. Default `origin/master`.
+#   BENCH     — `council` (default, ~5s) / `big-diff` (~30s) / `all`.
+#   VERBOSE   — set to anything to stream cargo + bench output.
+
+REF   ?= origin/master
+BENCH ?= council
+
+.PHONY: perf-vs
+perf-vs: $(TMP) build-rust ## Local A/B perf-compare HEAD vs $(REF) via a sibling worktree. Knobs: REF, BENCH, VERBOSE.
+	$(call say,perf-vs)
+	$(AATXE_BIN) perf-vs --against $(REF) --bench $(BENCH) \
+	    --out-dir $(TMP)/perf-vs/$(BENCH) \
+	    $(if $(VERBOSE),--verbose,)
+	@echo "    ✓ perf-vs: see $(TMP)/perf-vs/$(BENCH)/{head,base}.json + cmp.{json,md}"
+
+.PHONY: perf-vs-self
+perf-vs-self: $(TMP) build-rust ## Smoke test: perf-vs against HEAD~1 (or origin/master if no prior commit). Exercises the worktree + compare path end-to-end.
+	$(call say,perf-vs-self)
+	@ref=$$(git rev-parse --verify --quiet HEAD~1 || git rev-parse --verify origin/master); \
+	   $(AATXE_BIN) perf-vs --against $$ref --bench council \
+	       --out-dir $(TMP)/perf-vs/self
+	@echo "    ✓ perf-vs-self: see $(TMP)/perf-vs/self/cmp.md"
+
 .PHONY: council-dry-run
 council-dry-run: $(TMP) build-rust ## Pipe the bundled council fixture diff through `aatxe council`. Requires KIMI_API_KEY.
 	$(call say,council-dry-run)
