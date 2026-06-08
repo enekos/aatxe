@@ -199,8 +199,16 @@ pub fn parse_unified_diff(text: &str) -> Vec<ParsedFile> {
     // GitHub diffs have consistent line endings; checking the first 4 KB is
     // enough to detect CRLF with near-certainty, saving a 100 MB scan for the
     // overwhelmingly-common LF-only case.
+    //
+    // Walk back to a UTF-8 char boundary before slicing — naive `text[..4096]`
+    // panics when byte 4096 lands inside a multi-byte codepoint (e.g. `'✓'`
+    // mid-diff). Worst case the loop steps back 3 bytes.
     let owned: String;
-    let normalised: &str = if text[..text.len().min(4096)].contains("\r\n") {
+    let mut probe_end = text.len().min(4096);
+    while !text.is_char_boundary(probe_end) {
+        probe_end -= 1;
+    }
+    let normalised: &str = if text[..probe_end].contains("\r\n") {
         owned = text.replace("\r\n", "\n");
         &owned
     } else {
@@ -1017,5 +1025,26 @@ rename to new.txt
         for f in &chunks[0].files {
             assert!(f.body.contains("@@"), "diff body must remain intact");
         }
+    }
+
+    #[test]
+    fn parse_unified_diff_handles_multibyte_codepoint_at_probe_boundary() {
+        // Regression for a real CI failure on enekos/aatxe#5: the LF/CRLF
+        // probe used `text[..4096]` and panicked when byte 4096 landed
+        // inside a `'✓'` (3 UTF-8 bytes) in the PR body. The fix walks the
+        // probe boundary back to a char boundary before slicing.
+        //
+        // Construct a string with a 3-byte char straddling byte 4096 so a
+        // naive byte-slice would panic. ASCII padding + '✓' at offset 4095.
+        let mut s = String::with_capacity(8192);
+        s.push_str(&"a".repeat(4095));
+        s.push('✓'); // bytes 4095..4098
+        s.push_str(&"\ndiff --git a/x.rs b/x.rs\nindex 1..2 100644\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-x\n+y\n".repeat(2));
+        // Must not panic.
+        let parsed = parse_unified_diff(&s);
+        // Best-effort: we don't care exactly how many files come out of the
+        // synthetic input — just that the call returned without panicking
+        // and produced *some* shape the rest of the pipeline can handle.
+        let _ = parsed.len();
     }
 }

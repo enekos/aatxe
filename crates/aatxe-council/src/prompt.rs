@@ -314,8 +314,7 @@ pub fn build_judge_user_message(candidates: &[Finding]) -> String {
         let _ = writeln!(
             s,
             " (raised by {by})\n   title: {}\n   rationale: {}",
-            f.title,
-            f.rationale
+            f.title, f.rationale
         );
         if let Some(sug) = &f.suggestion {
             let _ = writeln!(s, "   suggestion: {sug}");

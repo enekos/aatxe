@@ -58,11 +58,7 @@ pub fn dedup_and_rank(findings: Vec<Finding>, opts: SynthOptions) -> Vec<Finding
     findings.sort_by(|a, b| {
         a.file
             .cmp(&b.file)
-            .then(
-                a.line
-                    .unwrap_or(u32::MAX)
-                    .cmp(&b.line.unwrap_or(u32::MAX)),
-            )
+            .then(a.line.unwrap_or(u32::MAX).cmp(&b.line.unwrap_or(u32::MAX)))
             .then(a.title.cmp(&b.title))
     });
 
@@ -85,9 +81,7 @@ pub fn dedup_and_rank(findings: Vec<Finding>, opts: SynthOptions) -> Vec<Finding
                     m.severity = f.severity;
                 }
                 m.raised_by = match (&m.raised_by, &f.raised_by) {
-                    (Some(a), Some(b)) if !a.split('+').any(|t| t == b) => {
-                        Some(format!("{a}+{b}"))
-                    }
+                    (Some(a), Some(b)) if !a.split('+').any(|t| t == b) => Some(format!("{a}+{b}")),
                     (Some(a), _) => Some(a.clone()),
                     (None, Some(b)) => Some(b.clone()),
                     (None, None) => None,
