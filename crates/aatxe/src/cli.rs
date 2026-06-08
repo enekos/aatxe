@@ -403,6 +403,25 @@ pub struct EvalsArgs {
     /// Same shape as `aatxe council --backend`. Default `pi-proxy`.
     #[arg(long, value_enum, default_value_t = BackendArg::PiProxy)]
     pub backend: BackendArg,
+
+    /// Offline confidence-floor recalibration: load a prior eval JSON
+    /// (which must contain per-finding records) and re-derive the
+    /// council metrics at each floor in `--recalibrate-floors`. Skips
+    /// the LLM-running path entirely — purely a math sweep over cached
+    /// records. Mutually exclusive with `--council-real-llm`.
+    ///
+    /// Use this to choose a new default floor from a single real-LLM
+    /// run instead of re-running the LLM once per candidate floor.
+    #[arg(long, conflicts_with = "council_real_llm")]
+    pub recalibrate_from: Option<PathBuf>,
+
+    /// Comma-separated list of floors to sweep when
+    /// `--recalibrate-from` is set. Default `0.55,0.60,0.65` — the
+    /// three points the calibrate-confidence-floor.sh script also
+    /// uses. The first entry is treated as the baseline; deltas are
+    /// printed relative to it.
+    #[arg(long, default_value = "0.55,0.60,0.65", value_delimiter = ',')]
+    pub recalibrate_floors: Vec<f64>,
 }
 
 /// `aatxe learn` — manage the learning corpus.

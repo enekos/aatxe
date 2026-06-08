@@ -67,6 +67,46 @@ impl Default for EvalTolerances {
     }
 }
 
+impl EvalTolerances {
+    /// Looser tolerances for real-LLM baselines. Real LLM calls are
+    /// non-deterministic: temperature isn't fixable across providers,
+    /// proposers run in parallel with race-dependent ordering, and the
+    /// judge's confidence numbers naturally jitter ±0.1 between runs.
+    /// The stub tolerances ([`Default`]) are calibrated for a
+    /// deterministic backend and would false-trigger on every real-LLM
+    /// re-run. These are the per-metric bands that empirically survive
+    /// the real-claude baseline's measured run-to-run variance.
+    ///
+    /// `forbidden_path_findings_rise` stays at 0 — a finding on a
+    /// lockfile is a calibration bug regardless of backend.
+    pub fn for_real_llm() -> Self {
+        Self {
+            critical_recall_drop: 0.10,
+            critical_precision_drop: 0.10,
+            critical_f1_drop: 0.10,
+            severity_calibration_mae_rise: 0.30,
+            judge_brier_score_rise: 0.10,
+            avg_fp_per_case_rise: 1.00,
+            forbidden_path_findings_rise: 0,
+            stats_pass_rate_drop: 0.0,
+            stats_null_fpr_rise: 0.05,
+            stats_borderline_tpr_drop: 0.10,
+        }
+    }
+
+    /// Pick the appropriate tolerances for a given baseline: real-LLM
+    /// baselines auto-relax to [`Self::for_real_llm`]; stub baselines
+    /// stay on [`Default::default`]. The CLI uses this to avoid burdening
+    /// the user with a `--tolerances` flag in the common case.
+    pub fn auto_for(baseline: &EvalReport) -> Self {
+        if baseline.council_used_real_llm {
+            Self::for_real_llm()
+        } else {
+            Self::default()
+        }
+    }
+}
+
 /// One regression — a metric that moved in the bad direction by more than
 /// the tolerance allows. The `direction` is always "worse" — fields that
 /// improve aren't flagged.
@@ -343,5 +383,100 @@ mod tests {
         let current = mk_report(Some(mk_council(0.95, 0.95, 0.95, 0.10, 0.02, 0.1, 0)), None);
         let regs = regressions_against_baseline(&baseline, &current, EvalTolerances::default());
         assert!(regs.is_empty());
+    }
+
+    // --------------------------- M2.5 real-LLM ---------------------------
+
+    #[test]
+    fn real_llm_tolerances_are_looser_than_default() {
+        let stub = EvalTolerances::default();
+        let real = EvalTolerances::for_real_llm();
+        // FP/case has the biggest variance between real-LLM runs (judge
+        // jitter compounds across 24 cases) — must be the most relaxed.
+        assert!(real.avg_fp_per_case_rise > stub.avg_fp_per_case_rise);
+        // Recall/F1 also relax because real LLM can lose a marginal catch
+        // and we don't want every flaky run to gate the build.
+        assert!(real.critical_recall_drop > stub.critical_recall_drop);
+        assert!(real.critical_f1_drop > stub.critical_f1_drop);
+        // Brier rises a bit since judge confidence is non-deterministic.
+        assert!(real.judge_brier_score_rise > stub.judge_brier_score_rise);
+        // Forbidden-path findings MUST stay at 0 — a finding on a
+        // lockfile / generated file is a calibration bug regardless of
+        // backend.
+        assert_eq!(real.forbidden_path_findings_rise, 0);
+        // MAE doesn't get further relaxation — real-LLM severity calls
+        // are no more variable than the existing 0.30 band already permits.
+        assert_eq!(
+            real.severity_calibration_mae_rise,
+            stub.severity_calibration_mae_rise
+        );
+    }
+
+    #[test]
+    fn auto_for_picks_real_llm_tolerances_when_baseline_used_real_llm() {
+        let mut real_baseline = mk_report(
+            Some(mk_council(0.75, 1.0, 0.857, 0.30, 0.35, 2.375, 0)),
+            None,
+        );
+        real_baseline.council_used_real_llm = true;
+        let t = EvalTolerances::auto_for(&real_baseline);
+        let real = EvalTolerances::for_real_llm();
+        assert_eq!(t.avg_fp_per_case_rise, real.avg_fp_per_case_rise);
+        assert_eq!(t.critical_f1_drop, real.critical_f1_drop);
+    }
+
+    #[test]
+    fn auto_for_picks_default_tolerances_when_baseline_is_stub() {
+        let stub_baseline = mk_report(Some(mk_council(0.95, 0.9, 0.92, 0.2, 0.05, 0.2, 0)), None);
+        let t = EvalTolerances::auto_for(&stub_baseline);
+        let default = EvalTolerances::default();
+        assert_eq!(t.avg_fp_per_case_rise, default.avg_fp_per_case_rise);
+        assert_eq!(t.critical_f1_drop, default.critical_f1_drop);
+    }
+
+    #[test]
+    fn real_llm_band_accepts_observed_run_to_run_variance() {
+        // Sanity: the committed real-claude.json numbers (critical_f1=0.857,
+        // FP/case=2.375) should not produce a regression when the same eval
+        // re-runs and lands within typical jitter (±0.05 on F1, ±0.5 on FP).
+        let mut baseline = mk_report(
+            Some(mk_council(0.75, 1.0, 0.857, 0.30, 0.35, 2.375, 0)),
+            None,
+        );
+        baseline.council_used_real_llm = true;
+        // Plausible jitter: F1 dips 0.08 (within 0.10 band), FP rises 0.8
+        // (within 1.0 band), brier wobbles +0.07 (within 0.10), recall
+        // dips 0.05 (within 0.10).
+        let mut current = mk_report(
+            Some(mk_council(0.70, 1.0, 0.777, 0.30, 0.42, 3.175, 0)),
+            None,
+        );
+        current.council_used_real_llm = true;
+        let regs =
+            regressions_against_baseline(&baseline, &current, EvalTolerances::auto_for(&baseline));
+        assert!(
+            regs.is_empty(),
+            "real-LLM jitter within band must not gate: {regs:?}"
+        );
+    }
+
+    #[test]
+    fn real_llm_band_still_catches_a_real_regression() {
+        // FP/case jumping from 2.375 to 5.0 (+2.625) blows past the
+        // looser 1.0 band → must gate.
+        let mut baseline = mk_report(
+            Some(mk_council(0.75, 1.0, 0.857, 0.30, 0.35, 2.375, 0)),
+            None,
+        );
+        baseline.council_used_real_llm = true;
+        let mut current = mk_report(Some(mk_council(0.75, 1.0, 0.857, 0.30, 0.35, 5.0, 0)), None);
+        current.council_used_real_llm = true;
+        let regs =
+            regressions_against_baseline(&baseline, &current, EvalTolerances::auto_for(&baseline));
+        assert!(
+            regs.iter()
+                .any(|r| r.metric == "council.avg_false_positives_per_case"),
+            "FP/case spike must still gate under real-LLM band: {regs:?}"
+        );
     }
 }

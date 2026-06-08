@@ -13,6 +13,13 @@
 //!   - fn fence (L48) `fn fence(body: &str) -> String`
 //! ```
 //!
+//! "Called by" entries are line-resolved when the source describer
+//! attributes the call to an enclosing function (every tree-sitter
+//! describer does — `aatxe-ast::ts`, `aatxe-ast::go`, `aatxe-ast::rust_lang`).
+//! When the regex fallback (`aatxe-ast::base`) is the only data source,
+//! the entry falls back to file-only attribution (no `::name` suffix).
+//! Both shapes coexist in the same list.
+//!
 //! The renderer is allocation-bounded by a soft byte cap so a large
 //! workspace doesn't blow the prompt budget. When the cap is hit the
 //! block is truncated with an explicit `… [+N more entries elided]`
@@ -20,6 +27,29 @@
 
 use crate::types::{strip_id_prefix, FileGraph, LogicSymbol, SymbolKind};
 use std::collections::HashMap;
+
+/// One caller of a symbol, recorded for the renderer's "called by" line.
+///
+/// `path` is the file the call originates in. `caller` is the enclosing
+/// function/method name when the source describer attributed the call to
+/// one (every tree-sitter describer does); `None` when the call came from
+/// the regex fallback's `file:<path>` placeholder, where line-resolved
+/// attribution isn't available.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CallerEntry {
+    path: String,
+    caller: Option<String>,
+}
+
+impl CallerEntry {
+    /// `path::caller` when caller-resolved, just `path` otherwise.
+    fn rendered(&self) -> String {
+        match &self.caller {
+            Some(name) => format!("{}::{name}", self.path),
+            None => self.path.clone(),
+        }
+    }
+}
 
 /// Hard cap on the rendered block. Council chunk policy already caps
 /// related-file context at 256KB; AST scope is structural metadata —
@@ -95,20 +125,37 @@ pub(crate) fn render_scope_block_with_cap(
     out
 }
 
-/// Build a `name → [path::caller_name]` index across the *entire*
-/// workspace so a symbol's "called by" list is cross-file.
-fn build_caller_index(workspace: &[(String, FileGraph)]) -> HashMap<String, Vec<String>> {
-    let mut idx: HashMap<String, Vec<String>> = HashMap::new();
+/// Build a `name → [CallerEntry]` index across the *entire* workspace so
+/// a symbol's "called by" list is cross-file and (when the describer
+/// supports it) line-resolved to the enclosing function.
+///
+/// Edge `from` shapes:
+/// - `"fn:name"` / `"mtd:Owner.name"` / etc. — tree-sitter describer
+///   resolved the call to an enclosing symbol; record `caller = Some(name)`.
+/// - `"file:<path>"` — regex fallback's file-virtual-symbol; record
+///   `caller = None` (the prefix-path is redundant with the iteration path).
+/// - `"file"` — tree-sitter describer fell out of every enclosing symbol
+///   (top-level expression); record `caller = None`.
+fn build_caller_index(workspace: &[(String, FileGraph)]) -> HashMap<String, Vec<CallerEntry>> {
+    let mut idx: HashMap<String, Vec<CallerEntry>> = HashMap::new();
     for (path, g) in workspace {
-        for callee_name in g.called_names() {
-            // The from-side may be a real symbol (tree-sitter describers)
-            // or a `file:<path>` placeholder (regex fallback). For now we
-            // attribute to the file. A future enhancement: line-resolve
-            // by walking edges and matching from-IDs back to symbols.
-            let entry = idx.entry(callee_name.to_string()).or_default();
-            let label = path.to_string();
-            if !entry.contains(&label) {
-                entry.push(label);
+        for edge in &g.edges {
+            if edge.kind != "call" {
+                continue;
+            }
+            let callee_name = strip_id_prefix(&edge.to).to_string();
+            let caller = if edge.from == "file" || edge.from.starts_with("file:") {
+                None
+            } else {
+                Some(strip_id_prefix(&edge.from).to_string())
+            };
+            let entry = CallerEntry {
+                path: path.to_string(),
+                caller,
+            };
+            let bucket = idx.entry(callee_name).or_default();
+            if !bucket.contains(&entry) {
+                bucket.push(entry);
             }
         }
     }
@@ -116,9 +163,9 @@ fn build_caller_index(workspace: &[(String, FileGraph)]) -> HashMap<String, Vec<
 }
 
 fn render_symbol_entry(
-    _path: &str,
+    path: &str,
     sym: &LogicSymbol,
-    callers: &HashMap<String, Vec<String>>,
+    callers: &HashMap<String, Vec<CallerEntry>>,
 ) -> String {
     let tag = sym.kind.tag();
     let exported = if sym.exported { " [pub]" } else { "" };
@@ -139,12 +186,15 @@ fn render_symbol_entry(
         s.push_str(&format!("    doc: {}\n", oneline(&sym.doc)));
     }
     if let Some(by) = callers.get(&sym.name) {
-        // Skip self-attribution noise (`render` is called by the file
-        // that defines it).
-        let others: Vec<&str> = by
+        // Drop in-file self-recursion (`render` calling itself) so the
+        // "called by" line surfaces only callers that genuinely add
+        // context. Cross-file callers with the same name (a different
+        // `render` in another file) and unrelated callers in the same
+        // file are both kept.
+        let others: Vec<String> = by
             .iter()
-            .map(String::as_str)
-            .filter(|p| !p.ends_with(&sym.name))
+            .filter(|e| !(e.path == path && e.caller.as_deref() == Some(&sym.name)))
+            .map(CallerEntry::rendered)
             .collect();
         if !others.is_empty() {
             s.push_str(&format!("    called by: {}\n", others.join(", ")));
@@ -241,7 +291,10 @@ mod tests {
     }
 
     #[test]
-    fn renders_called_by_when_cross_file_caller_exists() {
+    fn renders_called_by_when_cross_file_caller_exists_regex_fallback_shape() {
+        // `from = "file:<path>"` is the regex extractor's shape — no
+        // enclosing-symbol info, so the renderer falls back to file-only
+        // attribution (no `::name` suffix).
         let defined = FileGraph {
             symbols: vec![sym("helper", SymbolKind::Function, 7, "fn helper()", false)],
             ..Default::default()
@@ -260,8 +313,195 @@ mod tests {
         ];
         let out = render_scope_block(&ws, &["src/defined.rs".to_string()]);
         assert!(
-            out.contains("called by: src/cli.rs"),
-            "should attribute caller cross-file:\n{out}"
+            out.contains("called by: src/cli.rs\n") || out.contains("called by: src/cli.rs,"),
+            "regex-fallback shape should attribute file-only:\n{out}"
+        );
+        assert!(
+            !out.contains("src/cli.rs::"),
+            "regex fallback has no enclosing-symbol info, must NOT emit `::name`:\n{out}"
+        );
+    }
+
+    #[test]
+    fn line_resolved_caller_attribution_for_tree_sitter_edges() {
+        // `from = "fn:main"` is the tree-sitter describers' shape —
+        // line-resolved to the enclosing function. The renderer must
+        // emit `path::caller_name` for these (the M2.2 / #7b promise).
+        let defined = FileGraph {
+            symbols: vec![sym("helper", SymbolKind::Function, 7, "fn helper()", false)],
+            ..Default::default()
+        };
+        let caller = FileGraph {
+            edges: vec![
+                LogicEdge {
+                    from: "fn:main".into(),
+                    to: "fn:helper".into(),
+                    kind: "call".into(),
+                },
+                LogicEdge {
+                    from: "mtd:Cli.run".into(),
+                    to: "fn:helper".into(),
+                    kind: "call".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let ws = vec![
+            ("src/defined.rs".to_string(), defined),
+            ("src/cli.rs".to_string(), caller),
+        ];
+        let out = render_scope_block(&ws, &["src/defined.rs".to_string()]);
+        assert!(
+            out.contains("called by: src/cli.rs::main, src/cli.rs::Cli.run")
+                || out.contains("called by: src/cli.rs::Cli.run, src/cli.rs::main"),
+            "tree-sitter edges should resolve caller name into `path::caller`:\n{out}"
+        );
+    }
+
+    #[test]
+    fn mixes_resolved_and_unresolved_callers_in_one_line() {
+        // Real workspaces routinely have both — some files parsed by
+        // tree-sitter, some by the regex fallback. Both shapes coexist
+        // in the same `called by:` line, comma-separated, preserving
+        // each shape's attribution semantics.
+        let defined = FileGraph {
+            symbols: vec![sym("helper", SymbolKind::Function, 3, "fn helper()", false)],
+            ..Default::default()
+        };
+        let resolved_caller = FileGraph {
+            edges: vec![LogicEdge {
+                from: "fn:start".into(),
+                to: "fn:helper".into(),
+                kind: "call".into(),
+            }],
+            ..Default::default()
+        };
+        let unresolved_caller = FileGraph {
+            edges: vec![LogicEdge {
+                from: "file:src/legacy.py".into(),
+                to: "fn:helper".into(),
+                kind: "call".into(),
+            }],
+            ..Default::default()
+        };
+        let ws = vec![
+            ("src/defined.rs".to_string(), defined),
+            ("src/typed.rs".to_string(), resolved_caller),
+            ("src/legacy.py".to_string(), unresolved_caller),
+        ];
+        let out = render_scope_block(&ws, &["src/defined.rs".to_string()]);
+        assert!(
+            out.contains("src/typed.rs::start"),
+            "tree-sitter caller should be resolved:\n{out}"
+        );
+        assert!(
+            out.contains("src/legacy.py"),
+            "regex-fallback caller should still appear:\n{out}"
+        );
+        assert!(
+            !out.contains("src/legacy.py::"),
+            "regex-fallback must NOT gain a `::name` suffix:\n{out}"
+        );
+    }
+
+    #[test]
+    fn in_file_self_recursion_is_filtered_but_cross_file_homonym_is_kept() {
+        // `render` in src/x.rs calls itself recursively (self-recursion):
+        // suppress, otherwise every recursive helper would have a noisy
+        // self-attribution. A `render` in src/y.rs that calls a `render`
+        // in src/x.rs is a real cross-file edge — keep it.
+        let defined = FileGraph {
+            symbols: vec![sym("render", SymbolKind::Function, 4, "fn render()", false)],
+            edges: vec![LogicEdge {
+                from: "fn:render".into(),
+                to: "fn:render".into(),
+                kind: "call".into(),
+            }],
+            ..Default::default()
+        };
+        let homonym_caller = FileGraph {
+            edges: vec![LogicEdge {
+                from: "fn:render".into(),
+                to: "fn:render".into(),
+                kind: "call".into(),
+            }],
+            ..Default::default()
+        };
+        let ws = vec![
+            ("src/x.rs".to_string(), defined),
+            ("src/y.rs".to_string(), homonym_caller),
+        ];
+        let out = render_scope_block(&ws, &["src/x.rs".to_string()]);
+        // Cross-file homonym appears.
+        assert!(
+            out.contains("called by: src/y.rs::render"),
+            "cross-file homonym should appear:\n{out}"
+        );
+        // In-file self-recursion does NOT add `src/x.rs::render` to its
+        // own "called by" line.
+        assert!(
+            !out.contains("src/x.rs::render"),
+            "in-file self-recursion must be filtered:\n{out}"
+        );
+    }
+
+    #[test]
+    fn non_call_edge_kinds_are_ignored() {
+        // The renderer only consumes `kind = "call"` — extends / implements
+        // edges (if any describer grows them) must not pollute the
+        // caller index.
+        let defined = FileGraph {
+            symbols: vec![sym("helper", SymbolKind::Function, 1, "fn helper()", false)],
+            ..Default::default()
+        };
+        let caller = FileGraph {
+            edges: vec![LogicEdge {
+                from: "fn:main".into(),
+                to: "fn:helper".into(),
+                kind: "extends".into(),
+            }],
+            ..Default::default()
+        };
+        let ws = vec![
+            ("src/defined.rs".to_string(), defined),
+            ("src/cli.rs".to_string(), caller),
+        ];
+        let out = render_scope_block(&ws, &["src/defined.rs".to_string()]);
+        assert!(
+            !out.contains("called by:"),
+            "non-call edges must not generate `called by` line:\n{out}"
+        );
+    }
+
+    #[test]
+    fn from_equals_bare_file_is_treated_as_unresolved() {
+        // Tree-sitter describers emit `from = "file"` when no enclosing
+        // symbol existed (top-level expression). That must render as
+        // file-only attribution, same as the regex-fallback shape.
+        let defined = FileGraph {
+            symbols: vec![sym("helper", SymbolKind::Function, 1, "fn helper()", false)],
+            ..Default::default()
+        };
+        let caller = FileGraph {
+            edges: vec![LogicEdge {
+                from: "file".into(),
+                to: "fn:helper".into(),
+                kind: "call".into(),
+            }],
+            ..Default::default()
+        };
+        let ws = vec![
+            ("src/defined.rs".to_string(), defined),
+            ("scripts/run.rs".to_string(), caller),
+        ];
+        let out = render_scope_block(&ws, &["src/defined.rs".to_string()]);
+        assert!(
+            out.contains("called by: scripts/run.rs\n"),
+            "bare `file` from must produce file-only attribution:\n{out}"
+        );
+        assert!(
+            !out.contains("scripts/run.rs::"),
+            "bare `file` from must NOT produce `::name` suffix:\n{out}"
         );
     }
 

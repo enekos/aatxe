@@ -388,6 +388,60 @@ evals-update-baseline: evals-no-gate ## Replace the committed stub baseline with
 	@echo "    ✓ wrote $(EVALS_BASELINE) — commit it to update the gate"
 
 # ----------------------------------------------------------------------------
+# M2.5 — real-claude baseline gate
+# ----------------------------------------------------------------------------
+EVALS_REAL_CLAUDE_BASELINE := $(REPO_ROOT)/evals/council/baselines/real-claude.json
+
+.PHONY: evals-real-claude-gate
+evals-real-claude-gate: $(TMP) build-rust ## Run real-LLM eval (claude-code backend) + gate against the committed real-claude baseline. Looser tolerances auto-applied. Requires Claude Code subscription on the box.
+	$(call say,evals-real-claude-gate)
+	@if ! command -v claude >/dev/null 2>&1; then \
+	    echo "    ✗ \`claude\` binary not found on PATH — install Claude Code first."; \
+	    exit 1; \
+	fi
+	$(AATXE_BIN) evals \
+	    --council-real-llm \
+	    --backend claude-code \
+	    --out $(TMP)/aatxe-evals-real-claude.json \
+	    --markdown $(TMP)/aatxe-evals-real-claude.md \
+	    --baseline $(EVALS_REAL_CLAUDE_BASELINE)
+	@echo "    ✓ evals-real-claude-gate: wrote $(TMP)/aatxe-evals-real-claude.{json,md}"
+
+.PHONY: evals-update-real-claude-baseline
+evals-update-real-claude-baseline: $(TMP) build-rust ## Replace the committed real-claude baseline with a fresh real-LLM run. Use deliberately on intentional improvements.
+	$(call say,evals-update-real-claude-baseline)
+	@if ! command -v claude >/dev/null 2>&1; then \
+	    echo "    ✗ \`claude\` binary not found on PATH — install Claude Code first."; \
+	    exit 1; \
+	fi
+	$(AATXE_BIN) evals \
+	    --council-real-llm \
+	    --backend claude-code \
+	    --out $(EVALS_REAL_CLAUDE_BASELINE) \
+	    --markdown $(REPO_ROOT)/evals/council/baselines/real-claude.md \
+	    --no-fail
+	@echo "    ✓ wrote $(EVALS_REAL_CLAUDE_BASELINE) — commit it to update the gate"
+
+# ----------------------------------------------------------------------------
+# M2.4 — offline confidence-floor recalibration
+# ----------------------------------------------------------------------------
+.PHONY: evals-recalibrate-floor
+evals-recalibrate-floor: $(TMP) build-rust ## Sweep candidate confidence-floor values offline against a captured eval JSON. Set FROM=<path> (default tmp/aatxe-evals.json) and FLOORS=<csv> (default 0.50,0.55,0.60,0.65,0.70).
+	$(call say,evals-recalibrate-floor)
+	@FROM=$${FROM:-$(EVALS_JSON)}; \
+	FLOORS=$${FLOORS:-0.50,0.55,0.60,0.65,0.70}; \
+	if [ ! -f "$$FROM" ]; then \
+	    echo "    ✗ FROM=$$FROM does not exist — run \`make evals\` or \`make evals-real-claude-gate\` first."; \
+	    exit 1; \
+	fi; \
+	$(AATXE_BIN) evals \
+	    --stats=false --council=false \
+	    --recalibrate-from "$$FROM" \
+	    --recalibrate-floors "$$FLOORS" \
+	    --out $(TMP)/recalibration-sweep.md
+	@echo "    ✓ evals-recalibrate-floor: also wrote $(TMP)/recalibration-sweep.md"
+
+# ----------------------------------------------------------------------------
 # Local CI via `act`
 # ----------------------------------------------------------------------------
 
