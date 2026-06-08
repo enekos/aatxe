@@ -165,8 +165,23 @@ jobs:
           test -f /tmp/council/selftest.json || { echo "✗ json missing"; exit 1; }
           grep -q '<!-- aatxe:council -->' /tmp/council/selftest.md \
             || { echo "✗ sticky marker missing"; exit 1; }
-          jq -e '.proposerReviews | length == 4' /tmp/council/selftest.json >/dev/null \
-            || { echo "✗ proposer count != 4"; exit 1; }
+          # Reviews are per-chunk × per-persona. A small PR fits one chunk
+          # and yields 4 reviews (one per persona); a large PR chunks and
+          # yields 4 × N. The right invariant is "every persona ran at
+          # least once", not a fixed count. Without this fix the selftest
+          # gates fixture-only PRs and breaks on every real-PR run that
+          # chunks (e.g. enekos/aatxe#5).
+          uniq_agents=$(jq '[.proposerReviews[].agent] | unique | length' /tmp/council/selftest.json)
+          total=$(jq '.proposerReviews | length' /tmp/council/selftest.json)
+          if [ "$uniq_agents" != "4" ]; then
+            echo "✗ proposer agents covered = $uniq_agents, expected 4 (correctness/security/performance/maintainability)"
+            jq '[.proposerReviews[].agent] | unique' /tmp/council/selftest.json
+            exit 1
+          fi
+          if [ "$total" -lt 4 ] || [ "$((total % 4))" -ne 0 ]; then
+            echo "✗ proposer review count = $total (must be > 0 and a multiple of 4 — one per persona per chunk)"
+            exit 1
+          fi
           # `filesReviewed` is data-dependent — small PRs touch 1 file,
           # the fixture touches 4. Just require the field is present and
           # non-negative.
