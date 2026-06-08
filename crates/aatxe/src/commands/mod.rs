@@ -10,6 +10,7 @@ pub mod council;
 pub mod evals;
 pub mod learn;
 pub mod list;
+pub mod perf_vs;
 pub mod report;
 pub mod run;
 
@@ -35,5 +36,6 @@ pub fn run(cli: Cli) -> Result<Outcome> {
         Command::Council(a) => council::execute(a),
         Command::Evals(a) => evals::execute(a),
         Command::Learn(a) => learn::execute(a),
+        Command::PerfVs(a) => perf_vs::execute(a),
     }
 }

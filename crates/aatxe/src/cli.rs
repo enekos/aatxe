@@ -43,6 +43,74 @@ pub enum Command {
     /// current state. Persisted as a GitHub Actions artifact between
     /// council runs.
     Learn(LearnArgs),
+    /// Local perf-vs workflow: materialize a sibling worktree at the given
+    /// ref, run aatxe's own benches (council / big-diff) on both sides,
+    /// and compare via `aatxe-core::compare_reports`. Replaces the
+    /// commit → push → wait-on-GH-Actions loop with a ~30 s local one.
+    #[command(name = "perf-vs")]
+    PerfVs(PerfVsArgs),
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum PerfBenchArg {
+    /// `examples/council-bench` — 9 micros covering the council's pure
+    /// pipeline (diff parse, filter, chunk, prompt build, JSON parse,
+    /// synth, end-to-end with stub). ~5 s.
+    Council,
+    /// `examples/big-diff-bench` — large-diff parse cost. ~30 s.
+    BigDiff,
+    /// Run every supported bench and concatenate the results into one
+    /// `RunReport` per side before comparing.
+    All,
+}
+
+/// `aatxe perf-vs` — local A/B perf comparison across two worktrees.
+///
+/// Materializes a sibling worktree at `<worktree-dir>/<ref-slug>`,
+/// builds + runs the chosen bench(es) in both HEAD and that worktree,
+/// and diffs the resulting `RunReport`s with the same comparator the
+/// CI gate uses. The worktree is reused between runs (cheap rebuild)
+/// unless `--rm-worktree` is set.
+#[derive(clap::Args, Debug)]
+pub struct PerfVsArgs {
+    /// Git ref to compare HEAD against. Anything `git rev-parse` accepts:
+    /// branch, tag, sha, `HEAD~3`, `origin/master`.
+    #[arg(long)]
+    pub against: String,
+    /// Which bench(es) to run. Default `council` (fast).
+    #[arg(long, value_enum, default_value_t = PerfBenchArg::Council)]
+    pub bench: PerfBenchArg,
+    /// Parent directory for sibling worktrees. Default
+    /// `<repo>/../aatxe-worktrees`. Each `--against` ref gets its own
+    /// subdirectory named after the resolved short SHA.
+    #[arg(long)]
+    pub worktree_dir: Option<PathBuf>,
+    /// Remove the worktree after the run. Off by default so subsequent
+    /// runs against the same ref skip the `git worktree add` + initial
+    /// build cost.
+    #[arg(long)]
+    pub rm_worktree: bool,
+    /// Directory for intermediate JSON + markdown output. Default
+    /// `<repo>/tmp/perf-vs/<ref-slug>-<bench>`.
+    #[arg(long)]
+    pub out_dir: Option<PathBuf>,
+    /// Exit non-zero (code 2) when any bench regresses past
+    /// `--threshold`. Mirrors `aatxe compare --fail-on-regression`.
+    #[arg(long)]
+    pub fail_on_regression: bool,
+    /// Median-delta threshold for "meaningful" change (default 0.05 = 5%).
+    #[arg(long, default_value_t = 0.05)]
+    pub threshold: f64,
+    /// p-value cutoff for the Mann–Whitney U test (default 0.05).
+    #[arg(long, default_value_t = 0.05)]
+    pub alpha: f64,
+    /// CV cutoff above which the noise gate engages (default 0.25 = 25%).
+    #[arg(long, default_value_t = 0.25)]
+    pub noisy_cv: f64,
+    /// Stream bench stdout to the caller as it runs (default off — only
+    /// the final summary prints).
+    #[arg(long)]
+    pub verbose: bool,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
@@ -335,6 +403,25 @@ pub struct EvalsArgs {
     /// Same shape as `aatxe council --backend`. Default `pi-proxy`.
     #[arg(long, value_enum, default_value_t = BackendArg::PiProxy)]
     pub backend: BackendArg,
+
+    /// Offline confidence-floor recalibration: load a prior eval JSON
+    /// (which must contain per-finding records) and re-derive the
+    /// council metrics at each floor in `--recalibrate-floors`. Skips
+    /// the LLM-running path entirely — purely a math sweep over cached
+    /// records. Mutually exclusive with `--council-real-llm`.
+    ///
+    /// Use this to choose a new default floor from a single real-LLM
+    /// run instead of re-running the LLM once per candidate floor.
+    #[arg(long, conflicts_with = "council_real_llm")]
+    pub recalibrate_from: Option<PathBuf>,
+
+    /// Comma-separated list of floors to sweep when
+    /// `--recalibrate-from` is set. Default `0.55,0.60,0.65` — the
+    /// three points the calibrate-confidence-floor.sh script also
+    /// uses. The first entry is treated as the baseline; deltas are
+    /// printed relative to it.
+    #[arg(long, default_value = "0.55,0.60,0.65", value_delimiter = ',')]
+    pub recalibrate_floors: Vec<f64>,
 }
 
 /// `aatxe learn` — manage the learning corpus.

@@ -173,6 +173,40 @@ council-bench-self: council-bench ## Compare the council bench against itself �
 	    && echo "    ✓ council-bench-self: sticky marker present" \
 	    || (echo "    ✗ council-bench-self: sticky marker missing"; exit 1)
 
+# ----------------------------------------------------------------------------
+# Local perf-vs workflow
+# ----------------------------------------------------------------------------
+#
+# `aatxe perf-vs` materializes a sibling worktree at a target ref, runs
+# the chosen bench in both HEAD and that worktree, and pipes both
+# `RunReport`s through the same comparator the CI gate uses. The
+# worktree lives at `../aatxe-worktrees/<sha-short>` by default and is
+# reused between runs so the cargo cache stays warm.
+#
+# Knobs (all optional):
+#   REF       — ref to compare HEAD against. Default `origin/master`.
+#   BENCH     — `council` (default, ~5s) / `big-diff` (~30s) / `all`.
+#   VERBOSE   — set to anything to stream cargo + bench output.
+
+REF   ?= origin/master
+BENCH ?= council
+
+.PHONY: perf-vs
+perf-vs: $(TMP) build-rust ## Local A/B perf-compare HEAD vs $(REF) via a sibling worktree. Knobs: REF, BENCH, VERBOSE.
+	$(call say,perf-vs)
+	$(AATXE_BIN) perf-vs --against $(REF) --bench $(BENCH) \
+	    --out-dir $(TMP)/perf-vs/$(BENCH) \
+	    $(if $(VERBOSE),--verbose,)
+	@echo "    ✓ perf-vs: see $(TMP)/perf-vs/$(BENCH)/{head,base}.json + cmp.{json,md}"
+
+.PHONY: perf-vs-self
+perf-vs-self: $(TMP) build-rust ## Smoke test: perf-vs against HEAD~1 (or origin/master if no prior commit). Exercises the worktree + compare path end-to-end.
+	$(call say,perf-vs-self)
+	@ref=$$(git rev-parse --verify --quiet HEAD~1 || git rev-parse --verify origin/master); \
+	   $(AATXE_BIN) perf-vs --against $$ref --bench council \
+	       --out-dir $(TMP)/perf-vs/self
+	@echo "    ✓ perf-vs-self: see $(TMP)/perf-vs/self/cmp.md"
+
 .PHONY: council-dry-run
 council-dry-run: $(TMP) build-rust ## Pipe the bundled council fixture diff through `aatxe council`. Requires KIMI_API_KEY.
 	$(call say,council-dry-run)
@@ -352,6 +386,60 @@ evals-update-baseline: evals-no-gate ## Replace the committed stub baseline with
 	$(call say,evals-update-baseline)
 	cp $(EVALS_JSON) $(EVALS_BASELINE)
 	@echo "    ✓ wrote $(EVALS_BASELINE) — commit it to update the gate"
+
+# ----------------------------------------------------------------------------
+# M2.5 — real-claude baseline gate
+# ----------------------------------------------------------------------------
+EVALS_REAL_CLAUDE_BASELINE := $(REPO_ROOT)/evals/council/baselines/real-claude.json
+
+.PHONY: evals-real-claude-gate
+evals-real-claude-gate: $(TMP) build-rust ## Run real-LLM eval (claude-code backend) + gate against the committed real-claude baseline. Looser tolerances auto-applied. Requires Claude Code subscription on the box.
+	$(call say,evals-real-claude-gate)
+	@if ! command -v claude >/dev/null 2>&1; then \
+	    echo "    ✗ \`claude\` binary not found on PATH — install Claude Code first."; \
+	    exit 1; \
+	fi
+	$(AATXE_BIN) evals \
+	    --council-real-llm \
+	    --backend claude-code \
+	    --out $(TMP)/aatxe-evals-real-claude.json \
+	    --markdown $(TMP)/aatxe-evals-real-claude.md \
+	    --baseline $(EVALS_REAL_CLAUDE_BASELINE)
+	@echo "    ✓ evals-real-claude-gate: wrote $(TMP)/aatxe-evals-real-claude.{json,md}"
+
+.PHONY: evals-update-real-claude-baseline
+evals-update-real-claude-baseline: $(TMP) build-rust ## Replace the committed real-claude baseline with a fresh real-LLM run. Use deliberately on intentional improvements.
+	$(call say,evals-update-real-claude-baseline)
+	@if ! command -v claude >/dev/null 2>&1; then \
+	    echo "    ✗ \`claude\` binary not found on PATH — install Claude Code first."; \
+	    exit 1; \
+	fi
+	$(AATXE_BIN) evals \
+	    --council-real-llm \
+	    --backend claude-code \
+	    --out $(EVALS_REAL_CLAUDE_BASELINE) \
+	    --markdown $(REPO_ROOT)/evals/council/baselines/real-claude.md \
+	    --no-fail
+	@echo "    ✓ wrote $(EVALS_REAL_CLAUDE_BASELINE) — commit it to update the gate"
+
+# ----------------------------------------------------------------------------
+# M2.4 — offline confidence-floor recalibration
+# ----------------------------------------------------------------------------
+.PHONY: evals-recalibrate-floor
+evals-recalibrate-floor: $(TMP) build-rust ## Sweep candidate confidence-floor values offline against a captured eval JSON. Set FROM=<path> (default tmp/aatxe-evals.json) and FLOORS=<csv> (default 0.50,0.55,0.60,0.65,0.70).
+	$(call say,evals-recalibrate-floor)
+	@FROM=$${FROM:-$(EVALS_JSON)}; \
+	FLOORS=$${FLOORS:-0.50,0.55,0.60,0.65,0.70}; \
+	if [ ! -f "$$FROM" ]; then \
+	    echo "    ✗ FROM=$$FROM does not exist — run \`make evals\` or \`make evals-real-claude-gate\` first."; \
+	    exit 1; \
+	fi; \
+	$(AATXE_BIN) evals \
+	    --stats=false --council=false \
+	    --recalibrate-from "$$FROM" \
+	    --recalibrate-floors "$$FLOORS" \
+	    --out $(TMP)/recalibration-sweep.md
+	@echo "    ✓ evals-recalibrate-floor: also wrote $(TMP)/recalibration-sweep.md"
 
 # ----------------------------------------------------------------------------
 # Local CI via `act`

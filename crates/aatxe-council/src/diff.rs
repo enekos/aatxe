@@ -14,6 +14,7 @@
 //!    things that are intentional artefacts of the generator.
 
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 
 /// Default filename-and-glob blocklist applied before the council runs.
 /// Matching is on the full POSIX-style repo-relative path, OR on the path
@@ -198,8 +199,16 @@ pub fn parse_unified_diff(text: &str) -> Vec<ParsedFile> {
     // GitHub diffs have consistent line endings; checking the first 4 KB is
     // enough to detect CRLF with near-certainty, saving a 100 MB scan for the
     // overwhelmingly-common LF-only case.
+    //
+    // Walk back to a UTF-8 char boundary before slicing — naive `text[..4096]`
+    // panics when byte 4096 lands inside a multi-byte codepoint (e.g. `'✓'`
+    // mid-diff). Worst case the loop steps back 3 bytes.
     let owned: String;
-    let normalised: &str = if text[..text.len().min(4096)].contains("\r\n") {
+    let mut probe_end = text.len().min(4096);
+    while !text.is_char_boundary(probe_end) {
+        probe_end -= 1;
+    }
+    let normalised: &str = if text[..probe_end].contains("\r\n") {
         owned = text.replace("\r\n", "\n");
         &owned
     } else {
@@ -233,11 +242,17 @@ pub fn parse_unified_diff(text: &str) -> Vec<ParsedFile> {
     // Cap at 8 threads: on Apple Silicon (and many x86 laptops) more threads
     // just increase scheduler overhead without adding real parallelism, and
     // may land work on efficiency cores which are slower for CPU-bound tasks.
-    let n_threads = std::thread::available_parallelism()
-        .map(|n| n.get().min(8))
-        .unwrap_or(1)
-        .min(pieces.len())
-        .max(1);
+    // For small diffs thread spawn overhead dominates parallelism gains.
+    // Threshold at ~100 files: below that, sequential parsing is faster.
+    let n_threads = if pieces.len() < 100 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|n| n.get().min(8))
+            .unwrap_or(1)
+            .min(pieces.len())
+            .max(1)
+    };
     if n_threads == 1 {
         pieces.into_iter().filter_map(parse_one_file).collect()
     } else {
@@ -245,12 +260,11 @@ pub fn parse_unified_diff(text: &str) -> Vec<ParsedFile> {
         std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(n_threads);
             for chunk in pieces.chunks(chunk_size) {
-                handles.push(s.spawn(|| {
-                    chunk
-                        .iter()
-                        .copied()
-                        .filter_map(parse_one_file)
-                        .collect::<Vec<_>>()
+                let est = chunk.len();
+                handles.push(s.spawn(move || {
+                    let mut out = Vec::with_capacity(est);
+                    out.extend(chunk.iter().copied().filter_map(parse_one_file));
+                    out
                 }));
             }
             let mut out = Vec::with_capacity(pieces.len());
@@ -270,20 +284,16 @@ fn parse_one_file(body_without_header_prefix: &str) -> Option<ParsedFile> {
     let mut is_new = false;
     let mut is_deleted = false;
     let mut is_pure_rename = false;
-    let mut additions: u32 = 0;
-    let mut deletions: u32 = 0;
-    let mut saw_hunk = false;
     let mut saw_combined = false;
 
-    for line in body_without_header_prefix.split('\n') {
-        if saw_hunk {
-            if line.starts_with('+') && !line.starts_with("+++") {
-                additions += 1;
-            } else if line.starts_with('-') && !line.starts_with("---") {
-                deletions += 1;
-            }
-            continue;
-        }
+    let (mut additions, mut deletions) = (0u32, 0u32);
+    let hunk_start = body_without_header_prefix.find("\n@@");
+    let header = match hunk_start {
+        Some(pos) => &body_without_header_prefix[..pos],
+        None => body_without_header_prefix,
+    };
+
+    for line in header.split('\n') {
         if line.starts_with("diff --cc ") || line.starts_with("diff --combined ") {
             saw_combined = true;
             break;
@@ -304,19 +314,34 @@ fn parse_one_file(body_without_header_prefix: &str) -> Option<ParsedFile> {
             is_deleted = true;
         } else if line.starts_with("rename from ") || line.starts_with("rename to ") {
             is_pure_rename = true;
-        } else if line.starts_with("@@") {
-            saw_hunk = true;
+        }
+    }
+
+    if let Some(pos) = hunk_start {
+        let hunk_body = &body_without_header_prefix[pos + 1..];
+        let bytes = hunk_body.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'\n' && i + 1 < bytes.len() {
+                match bytes[i + 1] {
+                    b'+' => additions += 1,
+                    b'-' => deletions += 1,
+                    _ => {}
+                }
+            }
+            i += 1;
         }
     }
     if saw_combined {
         return None;
     }
-    if !saw_hunk && !is_pure_rename {
+    let has_hunk = hunk_start.is_some();
+    if !has_hunk && !is_pure_rename {
         // No hunks and not a rename: try harder — could be binary or
         // mode-only. We still emit it (path-filtering may drop it).
         // Fall through with path set from header.
     }
-    if saw_hunk {
+    if has_hunk {
         is_pure_rename = false;
     }
     let path = path
@@ -324,7 +349,7 @@ fn parse_one_file(body_without_header_prefix: &str) -> Option<ParsedFile> {
         .or_else(|| paths_from_header(body_without_header_prefix).map(|(_, b)| b))?
         .to_string();
 
-    let mut body = String::with_capacity(13 + body_without_header_prefix.len());
+    let mut body = String::with_capacity(11 + body_without_header_prefix.len());
     body.push_str("diff --git ");
     body.push_str(body_without_header_prefix);
 
@@ -352,7 +377,8 @@ fn strip_git_prefix(s: &str) -> &str {
 /// itself, used when `---`/`+++` are missing (binary, mode-only).
 /// `body` is the file slice *without* the leading `diff --git ` prefix.
 fn paths_from_header(body: &str) -> Option<(&str, &str)> {
-    let first = body.split('\n').next()?;
+    let newline = body.find('\n')?;
+    let first = &body[..newline];
     // first is like "a/X b/Y" (no "diff --git " prefix)
     let sep = first.find(" b/")?;
     let a = first[..sep].strip_prefix("a/").unwrap_or(&first[..sep]);
@@ -382,7 +408,7 @@ pub fn is_ignored(path: &str, patterns: &[&str]) -> bool {
                     }
                 }
             }
-            if path.contains(&format!("/{dir}/")) {
+            if path.split('/').any(|c| c == dir) {
                 return true;
             }
         } else if pat.starts_with('.') {
@@ -427,7 +453,7 @@ where
 /// elided.
 pub fn filter_ignored(files: Vec<ParsedFile>, patterns: &[&str]) -> (Vec<ParsedFile>, Vec<String>) {
     let mut kept = Vec::with_capacity(files.len());
-    let mut dropped = Vec::new();
+    let mut dropped = Vec::with_capacity(files.len() / 4);
     for f in files {
         if is_ignored(&f.path, patterns) {
             dropped.push(f.path);
@@ -471,7 +497,7 @@ pub fn chunk_for_review(
 ) -> Vec<DiffChunk> {
     let mut chunks: Vec<DiffChunk> = Vec::new();
     let mut cur_files: Vec<ParsedFile> = Vec::new();
-    let mut cur_body = String::new();
+    let mut cur_body = String::with_capacity(policy.max_chunk_bytes);
     let mut cur_context_bytes: usize = 0;
 
     for f in files {
@@ -504,9 +530,12 @@ pub fn chunk_for_review(
         let projected = cur_body.len() + f_trunc.body.len() + 1;
         if !cur_files.is_empty() && projected > policy.max_chunk_bytes {
             chunks.push(DiffChunk {
-                files: std::mem::take(&mut cur_files),
+                files: std::mem::replace(&mut cur_files, Vec::with_capacity(32)),
                 bytes: cur_body.len(),
-                body: std::mem::take(&mut cur_body),
+                body: std::mem::replace(
+                    &mut cur_body,
+                    String::with_capacity(policy.max_chunk_bytes),
+                ),
                 related: pack_related(related, policy),
             });
             cur_context_bytes = 0;
@@ -539,7 +568,7 @@ pub fn chunk_for_review_owned(
 ) -> Vec<DiffChunk> {
     let mut chunks: Vec<DiffChunk> = Vec::new();
     let mut cur_files: Vec<ParsedFile> = Vec::new();
-    let mut cur_body = String::new();
+    let mut cur_body = String::with_capacity(policy.max_chunk_bytes);
     let mut cur_context_bytes: usize = 0;
 
     for mut f in files {
@@ -577,9 +606,12 @@ pub fn chunk_for_review_owned(
         let projected = cur_body.len() + f_trunc.body.len() + 1;
         if !cur_files.is_empty() && projected > policy.max_chunk_bytes {
             chunks.push(DiffChunk {
-                files: std::mem::take(&mut cur_files),
+                files: std::mem::replace(&mut cur_files, Vec::with_capacity(32)),
                 bytes: cur_body.len(),
-                body: std::mem::take(&mut cur_body),
+                body: std::mem::replace(
+                    &mut cur_body,
+                    String::with_capacity(policy.max_chunk_bytes),
+                ),
                 related: pack_related(related, policy),
             });
             cur_context_bytes = 0;
@@ -640,7 +672,12 @@ fn truncate_body(body: &str, max_bytes: usize) -> String {
     let head = &body[..head_end];
     let tail = &body[tail_start..];
     let elided = body.len() - head.len() - tail.len();
-    format!("{head}\n... [truncated {elided} bytes — file too large] ...\n{tail}")
+    let mut s = String::with_capacity(head.len() + tail.len() + 64);
+    let _ = write!(
+        s,
+        "{head}\n... [truncated {elided} bytes — file too large] ...\n{tail}"
+    );
+    s
 }
 
 #[cfg(test)]
@@ -988,5 +1025,26 @@ rename to new.txt
         for f in &chunks[0].files {
             assert!(f.body.contains("@@"), "diff body must remain intact");
         }
+    }
+
+    #[test]
+    fn parse_unified_diff_handles_multibyte_codepoint_at_probe_boundary() {
+        // Regression for a real CI failure on enekos/aatxe#5: the LF/CRLF
+        // probe used `text[..4096]` and panicked when byte 4096 landed
+        // inside a `'✓'` (3 UTF-8 bytes) in the PR body. The fix walks the
+        // probe boundary back to a char boundary before slicing.
+        //
+        // Construct a string with a 3-byte char straddling byte 4096 so a
+        // naive byte-slice would panic. ASCII padding + '✓' at offset 4095.
+        let mut s = String::with_capacity(8192);
+        s.push_str(&"a".repeat(4095));
+        s.push('✓'); // bytes 4095..4098
+        s.push_str(&"\ndiff --git a/x.rs b/x.rs\nindex 1..2 100644\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-x\n+y\n".repeat(2));
+        // Must not panic.
+        let parsed = parse_unified_diff(&s);
+        // Best-effort: we don't care exactly how many files come out of the
+        // synthetic input — just that the call returned without panicking
+        // and produced *some* shape the rest of the pipeline can handle.
+        let _ = parsed.len();
     }
 }

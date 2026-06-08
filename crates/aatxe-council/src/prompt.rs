@@ -7,6 +7,7 @@ use crate::diff::DiffChunk;
 use crate::llm::{ChatMessage, ChatRequest};
 use crate::persona::{judge_system_prompt, persona_system_prompt, Persona};
 use crate::types::Finding;
+use std::fmt::Write;
 
 /// Soft cap on response tokens for a proposer call. Generous because Kimi
 /// K2.5's output budget is large and findings can stack on big diffs.
@@ -153,16 +154,17 @@ pub(crate) fn build_proposer_user_message_with_scope(chunk: &DiffChunk, ast_scop
         } else {
             ""
         };
-        s.push_str(&format!(
-            "- {}{}  (+{} / -{}){}\n",
+        let _ = writeln!(
+            s,
+            "- {}{}  (+{} / -{}){}",
             f.path, tag, f.additions, f.deletions, ctx_tag
-        ));
+        );
     }
 
     if !chunk.related.is_empty() {
         s.push_str("\nRelated repository files (NOT in this diff — read-only cross-reference):\n");
         for r in &chunk.related {
-            s.push_str(&format!("- {} ({} bytes)\n", r.path, r.content.len()));
+            let _ = writeln!(s, "- {} ({} bytes)", r.path, r.content.len());
         }
     }
 
@@ -181,7 +183,7 @@ pub(crate) fn build_proposer_user_message_with_scope(chunk: &DiffChunk, ast_scop
             // unwrap safe: we filtered for Some above.
             let ctx = f.context.as_deref().unwrap();
             let fence = pick_fence(ctx);
-            s.push_str(&format!("\n=== {} ===\n", f.path));
+            let _ = writeln!(s, "\n=== {} ===", f.path);
             s.push_str(&fence);
             s.push_str(lang_hint(&f.path));
             s.push('\n');
@@ -205,7 +207,7 @@ pub(crate) fn build_proposer_user_message_with_scope(chunk: &DiffChunk, ast_scop
         );
         for r in &chunk.related {
             let fence = pick_fence(&r.content);
-            s.push_str(&format!("\n=== {} ===\n", r.path));
+            let _ = writeln!(s, "\n=== {} ===", r.path);
             s.push_str(&fence);
             s.push_str(lang_hint(&r.path));
             s.push('\n');
@@ -296,20 +298,26 @@ fn lang_hint(path: &str) -> &'static str {
 /// them by `index`.
 pub fn build_judge_user_message(candidates: &[Finding]) -> String {
     let mut s = String::with_capacity(candidates.len() * 256 + 128);
-    s.push_str(&format!("Candidates ({}):\n", candidates.len()));
+    let _ = writeln!(s, "Candidates ({}):", candidates.len());
     for (i, f) in candidates.iter().enumerate() {
-        let line_info = f.line.map(|l| format!(":{l}")).unwrap_or_default();
         let by = f.raised_by.as_deref().unwrap_or("?");
-        s.push_str(&format!(
-            "[{i}] severity={} category={} file={}{line_info} (raised by {by})\n   title: {}\n   rationale: {}\n",
+        let _ = write!(
+            s,
+            "[{i}] severity={} category={} file={}",
             f.severity.label(),
             f.category.label(),
             f.file,
-            f.title,
-            f.rationale
-        ));
+        );
+        if let Some(l) = f.line {
+            let _ = write!(s, ":{l}");
+        }
+        let _ = writeln!(
+            s,
+            " (raised by {by})\n   title: {}\n   rationale: {}",
+            f.title, f.rationale
+        );
         if let Some(sug) = &f.suggestion {
-            s.push_str(&format!("   suggestion: {sug}\n"));
+            let _ = writeln!(s, "   suggestion: {sug}");
         }
     }
     s.push_str(

@@ -19,7 +19,8 @@ use crate::stub_client::StubKimi;
 use aatxe_council::llm::LlmClient;
 use aatxe_council::pipeline::{run_council_with_files, CouncilOptions};
 use aatxe_evals::council::{
-    score_case, score_council, CouncilCase, CouncilCaseResult, CouncilEvalOptions,
+    recalibrate_summary_from_records, score_case, score_council, CouncilCase, CouncilCaseResult,
+    CouncilEvalOptions, CouncilEvalSummary,
 };
 use aatxe_evals::report::{
     regressions_against_baseline, EvalReport, EvalTolerances, EVAL_SCHEMA_VERSION,
@@ -32,6 +33,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn execute(args: EvalsArgs) -> Result<Outcome> {
+    if args.recalibrate_from.is_some() {
+        return recalibrate(args);
+    }
+
     let started_at = current_iso8601();
 
     let stats_summary: Option<StatsEvalSummary> = if args.stats {
@@ -176,7 +181,18 @@ pub fn execute(args: EvalsArgs) -> Result<Outcome> {
             .with_context(|| format!("reading baseline from {}", baseline_path.display()))?;
         let baseline: EvalReport = serde_json::from_str(&baseline_raw)
             .with_context(|| format!("parsing baseline JSON from {}", baseline_path.display()))?;
-        let regs = regressions_against_baseline(&baseline, &report, EvalTolerances::default());
+        // Auto-select tolerances by baseline type: real-LLM baselines
+        // get the looser real-LLM band, stub baselines get strict deltas.
+        // M2.5 — `EvalTolerances::auto_for` keeps `--baseline real-claude.json`
+        // gates from false-triggering on every non-deterministic re-run.
+        let tolerances = EvalTolerances::auto_for(&baseline);
+        if baseline.council_used_real_llm {
+            eprintln!(
+                "aatxe evals: baseline is real-LLM → using looser tolerances (FP/case rise ≤ {:.2}, F1 drop ≤ {:.2})",
+                tolerances.avg_fp_per_case_rise, tolerances.critical_f1_drop
+            );
+        }
+        let regs = regressions_against_baseline(&baseline, &report, tolerances);
         if !regs.is_empty() {
             eprintln!("aatxe evals: {} regression(s) vs baseline:", regs.len());
             for r in &regs {
@@ -194,6 +210,139 @@ pub fn execute(args: EvalsArgs) -> Result<Outcome> {
         }
     }
     Ok(Outcome::Ok)
+}
+
+/// Offline floor recalibration driver.
+///
+/// Loads a prior eval JSON, validates that it carries per-finding records
+/// (otherwise the user needs to re-run the LLM), then re-derives the
+/// council summary at each requested floor. Prints a markdown delta table
+/// to stdout, optionally writes it to `--out`. Doesn't trigger the gate —
+/// recalibration is a planning tool, not a CI assertion.
+fn recalibrate(args: EvalsArgs) -> Result<Outcome> {
+    let from = args
+        .recalibrate_from
+        .as_ref()
+        .expect("guarded by execute()");
+    if args.recalibrate_floors.is_empty() {
+        return Err(anyhow!(
+            "--recalibrate-from given but --recalibrate-floors is empty"
+        ));
+    }
+
+    let raw = fs::read_to_string(from)
+        .with_context(|| format!("reading prior eval JSON from {}", from.display()))?;
+    let prior: EvalReport = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing prior eval JSON from {}", from.display()))?;
+    let Some(prior_council) = prior.council.clone() else {
+        return Err(anyhow!(
+            "prior eval JSON {} has no council summary — nothing to recalibrate",
+            from.display()
+        ));
+    };
+
+    let corpus = args
+        .corpus
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("evals/council/cases"));
+    if !corpus.is_dir() {
+        return Err(anyhow!(
+            "corpus dir {} not found (needed to re-match findings against ground truth)",
+            corpus.display()
+        ));
+    }
+    let cases_by_name: HashMap<String, CouncilCase> = load_corpus(&corpus)?
+        .into_iter()
+        .map(|(c, _, _)| (c.name.clone(), c))
+        .collect();
+
+    let mut rows: Vec<(f64, CouncilEvalSummary)> =
+        Vec::with_capacity(args.recalibrate_floors.len());
+    for &floor in &args.recalibrate_floors {
+        if !(0.0..=1.0).contains(&floor) {
+            return Err(anyhow!(
+                "floor {floor} is out of range — must be in [0.0, 1.0]"
+            ));
+        }
+        let summary = recalibrate_summary_from_records(
+            &cases_by_name,
+            &prior_council,
+            CouncilEvalOptions {
+                confidence_floor: floor,
+            },
+        )
+        .map_err(|e| anyhow!("recalibration failed at floor {floor}: {e}"))?;
+        rows.push((floor, summary));
+    }
+
+    let table = render_recalibration_table(from, &rows);
+    println!("{table}");
+
+    if let Some(out_path) = &args.out {
+        fs::write(out_path, &table)
+            .with_context(|| format!("writing recalibration table to {}", out_path.display()))?;
+        eprintln!(
+            "aatxe evals: wrote recalibration table to {}",
+            out_path.display()
+        );
+    }
+
+    Ok(Outcome::Ok)
+}
+
+/// Render a side-by-side markdown comparison: baseline floor + one column
+/// per other floor with delta vs baseline. Numeric columns use the same
+/// precision as [`print_summary_to_stderr`].
+fn render_recalibration_table(source: &Path, rows: &[(f64, CouncilEvalSummary)]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "## Confidence-floor recalibration sweep\n\n_source:_ `{}`\n\n",
+        source.display()
+    ));
+
+    // Header row.
+    out.push_str("| metric |");
+    for (floor, _) in rows {
+        out.push_str(&format!(" floor={:.2} |", floor));
+    }
+    out.push('\n');
+    out.push_str("|---|");
+    for _ in rows {
+        out.push_str("---:|");
+    }
+    out.push('\n');
+
+    let baseline = &rows[0].1;
+    type MetricRow = (&'static str, fn(&CouncilEvalSummary) -> f64);
+    let metric_rows: &[MetricRow] = &[
+        ("cases_fully_recalled", |s| s.cases_fully_recalled as f64),
+        ("cases_over_cap", |s| s.cases_over_cap as f64),
+        ("critical_recall", |s| s.critical_recall),
+        ("critical_precision", |s| s.critical_precision),
+        ("critical_F1", |s| s.critical_f1),
+        ("severity_calibration_MAE", |s| s.severity_calibration_mae),
+        ("judge_brier_score", |s| s.judge_brier_score),
+        ("FP/case", |s| s.avg_false_positives_per_case),
+        ("forbidden_path_findings", |s| {
+            s.forbidden_path_findings as f64
+        }),
+    ];
+    for (label, getter) in metric_rows {
+        out.push_str(&format!("| {label} |"));
+        for (i, (_, s)) in rows.iter().enumerate() {
+            let v = getter(s);
+            if i == 0 {
+                out.push_str(&format!(" {v:.4} |"));
+            } else {
+                let b = getter(baseline);
+                let delta = v - b;
+                let sign = if delta > 0.0 { "+" } else { "" };
+                out.push_str(&format!(" {v:.4} ({sign}{delta:.4}) |"));
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 #[derive(Debug, Deserialize)]
