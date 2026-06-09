@@ -84,7 +84,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install aatxe CLI
-        uses: ./.github/actions/install-aatxe
+        # Cross-repo reference: `./.github/actions/install-aatxe` resolves
+        # against the caller's checkout, which doesn't have the composite
+        # action. The fully-qualified form pulls it from this repo at the
+        # ref the reusable workflow itself was loaded from.
+        uses: enekos/aatxe/.github/actions/install-aatxe@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
