@@ -88,7 +88,7 @@ jobs:
         # against the caller's checkout, which doesn't have the composite
         # action. The fully-qualified form pulls it from this repo at the
         # ref the reusable workflow itself was loaded from.
-        uses: enekos/aatxe/.github/actions/install-aatxe@main
+        uses: enekos/aatxe/.github/actions/install-aatxe@master
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
