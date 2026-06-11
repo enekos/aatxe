@@ -95,16 +95,17 @@ jobs:
           mkdir -p /tmp/base
           git fetch origin "${{ github.base_ref }}" --depth=1
           git checkout -q "origin/${{ github.base_ref }}"
-          # Build the bench bins as they exist on the base ref. Any that
-          # don't compile/exist there are simply absent → their HEAD benches
-          # show up as New, not as regressions.
-          cargo build --release \
-            --bin aatxe-core-bench \
-            --bin aatxe-ast-bench \
-            --bin aatxe-council-bench
+          # Build + run each bench as it exists on the base ref, one at a
+          # time. Per-bench (not a single multi-bin cargo invocation) because
+          # `cargo build --bin A --bin B` fails atomically if *any* bin is
+          # unknown on base — that would starve a bench that does exist there.
+          # Delete the stale HEAD-built binary first so a base build failure
+          # can't silently fall back to running HEAD's binary as the "base":
+          # absence must mean "new bench → informational", never "no change".
           for svc in core ast council; do
             bin="target/release/aatxe-${svc}-bench"
-            if [ -x "$bin" ]; then
+            rm -f "$bin"
+            if cargo build --release --bin "aatxe-${svc}-bench" 2>/dev/null && [ -x "$bin" ]; then
               AATXE_SERVICE="aatxe-${svc}" AATXE_REF="${{ github.base_ref }}" "$bin" > "/tmp/base/${svc}.json" \
                 && echo "    ✓ base benched: ${svc}" \
                 || echo "    → base bench failed for ${svc} (treated as new)"
