@@ -94,6 +94,17 @@ jobs:
       - name: Bench HEAD
         run: |
           mkdir -p /tmp/head
+          # Process-level warm-up: the harness only does 5 *intra-process*
+          # warmup batches, which don't cover the cold-start of a freshly
+          # exec'd, freshly-built binary — code pages and CPU caches are cold,
+          # so the FIRST benches in the suite (e.g. diff::parse_unified_diff)
+          # read systematically slow. HEAD and base are built + run cold in
+          # separate phases, so that cold-start lands asymmetrically and shows
+          # up as a phantom regression. A throwaway run warms the binary so the
+          # measured run is steady-state on both sides.
+          for b in core ast council; do
+            "/tmp/aatxe-bin/aatxe-${b}-bench" > /dev/null 2>&1 || true
+          done
           AATXE_SERVICE=aatxe-core    AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-core-bench    > /tmp/head/core.json
           AATXE_SERVICE=aatxe-ast     AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-ast-bench     > /tmp/head/ast.json
           AATXE_SERVICE=aatxe-council AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-council-bench > /tmp/head/council.json
@@ -118,6 +129,9 @@ jobs:
             bin="target/release/aatxe-${svc}-bench"
             rm -f "$bin"
             if cargo build --release --bin "aatxe-${svc}-bench" 2>/dev/null && [ -x "$bin" ]; then
+              # Throwaway warm-up run (see "Bench HEAD") so base is measured at
+              # steady state too — symmetric with HEAD, kills cold-start drift.
+              "$bin" > /dev/null 2>&1 || true
               AATXE_SERVICE="aatxe-${svc}" AATXE_REF="${{ github.base_ref }}" "$bin" > "/tmp/base/${svc}.json" \
                 && echo "    ✓ base benched: ${svc}" \
                 || echo "    → base bench failed for ${svc} (treated as new)"
