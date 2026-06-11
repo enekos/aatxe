@@ -105,7 +105,14 @@ fn bench_bins(b: PerfBenchArg) -> Vec<&'static str> {
     match b {
         PerfBenchArg::Council => vec!["aatxe-council-bench"],
         PerfBenchArg::BigDiff => vec!["aatxe-big-diff-bench"],
-        PerfBenchArg::All => vec!["aatxe-council-bench", "aatxe-big-diff-bench"],
+        PerfBenchArg::Core => vec!["aatxe-core-bench"],
+        PerfBenchArg::Ast => vec!["aatxe-ast-bench"],
+        PerfBenchArg::All => vec![
+            "aatxe-council-bench",
+            "aatxe-big-diff-bench",
+            "aatxe-core-bench",
+            "aatxe-ast-bench",
+        ],
     }
 }
 
@@ -141,7 +148,10 @@ mod tests {
             bench_bins(PerfBenchArg::BigDiff),
             vec!["aatxe-big-diff-bench"]
         );
-        assert_eq!(bench_bins(PerfBenchArg::All).len(), 2);
+        assert_eq!(bench_bins(PerfBenchArg::Core), vec!["aatxe-core-bench"]);
+        assert_eq!(bench_bins(PerfBenchArg::Ast), vec!["aatxe-ast-bench"]);
+        // `All` must stay in lockstep with every concrete variant.
+        assert_eq!(bench_bins(PerfBenchArg::All).len(), 4);
     }
 
     #[test]
