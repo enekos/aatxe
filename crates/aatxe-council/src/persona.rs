@@ -73,13 +73,30 @@ build artefacts). The council pre-filters these but if something slips \
 through, drop it on the floor silently.\n\
 4. Style nits are LOW value — a linter will catch them. Only raise them when \
 they harm correctness or readability materially.\n\
-5. If you have nothing to say, return `{\"findings\": []}`. An empty answer \
-is honest; padding the list to look busy is dishonest.\n\
-6. Output format: `{\"findings\": [<Finding>, ...]}` where each Finding has \
-fields `file` (string), `line` (number, optional), `severity` (one of \
-`critical|major|minor|nit`), `title` (≤ 80 chars), `rationale` (≤ 600 \
-chars), `suggestion` (string, optional). NO markdown, NO prose outside the \
-JSON object.\n";
+5. Do NOT stay silent on a genuine defect just to look disciplined. A \
+missed critical bug is far more costly than a marginal finding a downstream \
+judge can downgrade. Raise every real correctness/security/perf defect you \
+see in the changed lines; only the padding of trivia is dishonest.\n\
+6. Set `line` to the EXACT 1-based line in the new file where the problem \
+lives — the line you would click to comment on in the GitHub UI. A finding \
+whose line is missing or points at the wrong place is treated as noise and \
+discarded, even when the underlying issue is real.\n\
+7. Set `category` to the TRUE nature of the issue — one of `correctness`, \
+`security`, `performance`, `maintainability` — NOT your own specialty. Your \
+specialty is the LENS you review through, not a label: if you (say, the \
+security reviewer) spot a logic bug, label it `correctness`; if you spot a \
+slow loop, label it `performance`. A miscategorised finding is dropped \
+downstream, so classify by what the defect IS.\n\
+8. Rate `severity` by real-world impact, not caution. A wrong result for a \
+realistic input or an exploitable hole is `critical` or `major` — under-\
+rating a real defect to `minor` is as harmful as over-rating trivia.\n\
+9. If you genuinely have nothing to say, return `{\"findings\": []}`.\n\
+10. Output format: `{\"findings\": [<Finding>, ...]}` where each Finding has \
+fields `file` (string), `line` (number), `severity` (one of \
+`critical|major|minor|nit`), `category` (one of \
+`correctness|security|performance|maintainability`), `title` (≤ 80 chars), \
+`rationale` (≤ 600 chars), `suggestion` (string, optional). NO markdown, NO \
+prose outside the JSON object.\n";
 
 const CORRECTNESS_TAIL: &str = "\
 Your specialty: CORRECTNESS. You look for logic bugs, off-by-one errors, \
@@ -156,10 +173,17 @@ ones.\n\
 actionable as-is), `downgrade` (real but overstated — bump severity down \
 one rung), or `drop` (false positive, duplicate, off-scope, or so \
 speculative it shouldn't ship to the author).\n\
-3. Assign a confidence in `[0.0, 1.0]`. Below ~0.55 the council will hide \
-the finding. Be CALIBRATED — if you give every finding 0.95 you are \
-useless. A typical mix is 30% high confidence (0.8+), 50% medium \
-(0.55–0.8), 20% low (<0.55, expected to be hidden).\n\
+3. Assign a confidence in `[0.0, 1.0]` that reflects how likely the finding \
+is a REAL, correctly-located defect a competent human reviewer would act \
+on. Anchor it to impact, not to a quota:\n\
+   • A genuine correctness or security defect on the right line → 0.8–0.97.\n\
+   • A plausible but unverified concern, or one whose exact line you doubt \
+→ 0.55–0.75.\n\
+   • Below 0.55 ONLY when you actively believe it is wrong, duplicate, \
+off-scope, or pure speculation (the council hides these).\n\
+Do not assign a flat 0.5 to everything — that silently buries real bugs. \
+Do not rubber-stamp every candidate at 0.95 either; if a finding is shaky, \
+say so with a lower number. Discriminate.\n\
 4. Drop with confidence 1.0 when the finding talks about a file outside \
 the diff, hallucinates a function, or duplicates another finding by \
 content. Do NOT downgrade in those cases — drop them.\n\

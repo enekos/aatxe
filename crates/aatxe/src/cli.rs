@@ -64,6 +64,13 @@ pub enum PerfBenchArg {
     Council,
     /// `examples/big-diff-bench` — large-diff parse cost. ~30 s.
     BigDiff,
+    /// `examples/core-bench` — the `aatxe-core` statistical brain:
+    /// summarize_samples, Mann-Whitney U, MAD, Welch-t, compare_reports,
+    /// and the affected-set import extractor. ~5 s.
+    Core,
+    /// `examples/ast-bench` — `aatxe-ast` tree-sitter parse + scope-render
+    /// cost across Rust/TS/Go fixtures. ~5 s.
+    Ast,
     /// Run every supported bench and concatenate the results into one
     /// `RunReport` per side before comparing.
     All,
@@ -340,7 +347,10 @@ pub struct CouncilArgs {
     /// out to the locally-installed `pi` agent against the Kimi-coding
     /// endpoint. `claude-code` shells out to the locally-installed
     /// `claude` CLI and uses the engineer's Claude Code
-    /// subscription/auth — no separate API key needed.
+    /// subscription/auth — no separate API key needed. `gemini` calls
+    /// Google's Gemini API directly over HTTP (needs `GEMINI_API_KEY`,
+    /// model via `GEMINI_MODEL` or `--model`); it has no repo tool access,
+    /// only the pre-packed prompt.
     #[arg(long, value_enum, default_value_t = BackendArg::PiProxy)]
     pub backend: BackendArg,
     /// Path or executable name of the `claude` binary used when
@@ -371,6 +381,11 @@ pub enum BackendArg {
     PiProxy,
     /// Shell out to the local `claude` CLI (Claude Code subscription).
     ClaudeCode,
+    /// Call Google's Gemini API directly over HTTP (OpenAI-compatible
+    /// endpoint). Needs `GEMINI_API_KEY`; model via `GEMINI_MODEL` or
+    /// `--model`. Unlike the agent backends it has no repo tool access —
+    /// it sees only the pre-packed prompt (diff + AST scope + context).
+    Gemini,
 }
 
 /// `aatxe evals` — run the eval harness.

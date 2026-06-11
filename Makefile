@@ -101,7 +101,7 @@ $(TMP):
 	@mkdir -p $(TMP)
 
 .PHONY: e2e
-e2e: e2e-rust e2e-go e2e-ts e2e-regression-gate council-bench-self evals ## Run the full aatxe pipeline against every adapter + a fake regression + council bench self-compare + the stub-LLM eval harness
+e2e: e2e-rust e2e-go e2e-ts e2e-regression-gate council-bench-self core-bench-self ast-bench-self evals ## Run the full aatxe pipeline against every adapter + a fake regression + self-bench compares (council/core/ast) + the stub-LLM eval harness
 
 .PHONY: e2e-rust
 e2e-rust: $(TMP) build-rust ## Rust example: run → compare against itself → markdown
@@ -174,6 +174,51 @@ council-bench-self: council-bench ## Compare the council bench against itself �
 	    || (echo "    ✗ council-bench-self: sticky marker missing"; exit 1)
 
 # ----------------------------------------------------------------------------
+# Self-benches — aatxe benching its own hot code (very meta)
+# ----------------------------------------------------------------------------
+#
+# `core-bench` covers the statistical brain (`aatxe-core`): summarize_samples,
+# Mann-Whitney U, MAD, Welch-t, compare_reports, and the affected-set import
+# extractor — the no-network code that runs on every gate. `ast-bench` covers
+# `aatxe-ast` tree-sitter parsing — the heaviest per-call CPU on the council's
+# pre-LLM path. Both feed the self-bench CI workflow (`aatxe-self-bench.yml`).
+
+CORE_BENCH_BIN := $(REPO_ROOT)/target/release/aatxe-core-bench
+AST_BENCH_BIN  := $(REPO_ROOT)/target/release/aatxe-ast-bench
+
+.PHONY: core-bench
+core-bench: $(TMP) build-rust ## Run the aatxe-core stats/compare benches and dump the RunReport
+	$(call say,core-bench)
+	$(CARGO) build --release --bin aatxe-core-bench
+	AATXE_SERVICE=aatxe-core $(CORE_BENCH_BIN) > $(TMP)/core.json
+	@head -c 400 $(TMP)/core.json && echo "" && echo "    ✓ core-bench: wrote $(TMP)/core.json"
+
+.PHONY: core-bench-self
+core-bench-self: core-bench ## Compare the core bench against itself — proves the gate works on aatxe-core
+	$(call say,core-bench-self)
+	$(AATXE_BIN) compare --base $(TMP)/core.json --head $(TMP)/core.json \
+	    --out $(TMP)/core.cmp.json --markdown $(TMP)/core.md
+	@grep -q '<!-- aatxe:report -->' $(TMP)/core.md \
+	    && echo "    ✓ core-bench-self: sticky marker present" \
+	    || (echo "    ✗ core-bench-self: sticky marker missing"; exit 1)
+
+.PHONY: ast-bench
+ast-bench: $(TMP) build-rust ## Run the aatxe-ast tree-sitter parse benches and dump the RunReport
+	$(call say,ast-bench)
+	$(CARGO) build --release --bin aatxe-ast-bench
+	AATXE_SERVICE=aatxe-ast $(AST_BENCH_BIN) > $(TMP)/ast.json
+	@head -c 400 $(TMP)/ast.json && echo "" && echo "    ✓ ast-bench: wrote $(TMP)/ast.json"
+
+.PHONY: ast-bench-self
+ast-bench-self: ast-bench ## Compare the ast bench against itself — proves the gate works on aatxe-ast
+	$(call say,ast-bench-self)
+	$(AATXE_BIN) compare --base $(TMP)/ast.json --head $(TMP)/ast.json \
+	    --out $(TMP)/ast.cmp.json --markdown $(TMP)/ast.md
+	@grep -q '<!-- aatxe:report -->' $(TMP)/ast.md \
+	    && echo "    ✓ ast-bench-self: sticky marker present" \
+	    || (echo "    ✗ ast-bench-self: sticky marker missing"; exit 1)
+
+# ----------------------------------------------------------------------------
 # Local perf-vs workflow
 # ----------------------------------------------------------------------------
 #
@@ -185,7 +230,8 @@ council-bench-self: council-bench ## Compare the council bench against itself �
 #
 # Knobs (all optional):
 #   REF       — ref to compare HEAD against. Default `origin/master`.
-#   BENCH     — `council` (default, ~5s) / `big-diff` (~30s) / `all`.
+#   BENCH     — `council` (default, ~5s) / `big-diff` (~30s) / `core` /
+#               `ast` / `all`.
 #   VERBOSE   — set to anything to stream cargo + bench output.
 
 REF   ?= origin/master
@@ -381,6 +427,20 @@ evals-real: $(TMP) build-rust ## Run the eval harness using the real Kimi backen
 	    --markdown $(TMP)/aatxe-evals-real.md
 	@echo "    ✓ evals-real: wrote $(TMP)/aatxe-evals-real.{json,md}"
 
+.PHONY: evals-real-gemini
+evals-real-gemini: $(TMP) build-rust ## Run the eval harness using the real Gemini backend (direct HTTP, no gate). Requires GEMINI_API_KEY.
+	$(call say,evals-real-gemini)
+	@if [ -z "$$GEMINI_API_KEY" ]; then \
+	    echo "    ✗ GEMINI_API_KEY is unset. Export it and rerun (model via GEMINI_MODEL, default gemini-2.5-flash)."; \
+	    exit 1; \
+	fi
+	$(AATXE_BIN) evals \
+	    --council-real-llm \
+	    --backend gemini \
+	    --out $(TMP)/aatxe-evals-real-gemini.json \
+	    --markdown $(TMP)/aatxe-evals-real-gemini.md
+	@echo "    ✓ evals-real-gemini: wrote $(TMP)/aatxe-evals-real-gemini.{json,md}"
+
 .PHONY: evals-update-baseline
 evals-update-baseline: evals-no-gate ## Replace the committed stub baseline with the current run. Use only when corpus or pipeline changes are deliberate.
 	$(call say,evals-update-baseline)
@@ -465,6 +525,11 @@ act-ci-rust: ## Run only the `rust` job of ci.yml locally
 .PHONY: act-list
 act-list: ## List workflows + jobs visible to act
 	$(ACT) -l
+
+.PHONY: act-self-bench
+act-self-bench: ## Run the self-bench workflow under act (push event → self-compare, no base; proves the bench→compare→gate pipeline)
+	$(call say,act-self-bench)
+	$(ACT) push --workflows .github/workflows/aatxe-self-bench.yml $(ACT_FLAGS)
 
 .PHONY: act-council
 act-council: ## Run the council selftest workflow under act (stub-LLM by default; set KIMI_API_KEY + USE_REAL_KIMI=true for real Kimi)

@@ -241,13 +241,17 @@ aatxe/
 │   ├── ts-example/         # smoke bench files for each adapter
 │   ├── go-example/
 │   ├── rust-example/
-│   └── council-bench/      # microbenches for the council pipeline
+│   ├── council-bench/      # microbenches for the council pipeline
+│   ├── core-bench/         # microbenches for the aatxe-core statistical brain
+│   ├── ast-bench/          # microbenches for aatxe-ast tree-sitter parsing
+│   └── big-diff-bench/     # large-diff parse-cost bench
 ├── evals/
 │   ├── council/cases/      # labeled diff fixtures + ground-truth JSON
 │   └── council/baselines/  # committed baselines the CI gate diffs against
 └── .github/workflows/
     ├── ci.yml                       # builds + tests the workspace (Rust + Go + TS)
     ├── aatxe.yml                    # reusable workflow for downstream services
+    ├── aatxe-self-bench.yml         # aatxe gates its own hot code with aatxe
     ├── aatxe-council.yml            # reusable council workflow
     ├── aatxe-council-selftest.yml   # council selftest (stub or real Kimi)
     └── aatxe-evals.yml              # eval harness — baseline-gated on every PR
@@ -363,19 +367,28 @@ aatxe council --pr 42 \
 
 ### Backends
 
-The council shells out to a local agent CLI per LLM call; the agent
-does the model + tool-use loop and writes the final assistant message
-to stdout. Two backends are wired today, selectable with `--backend`:
+Three backends are wired today, selectable with `--backend`:
 
-| `--backend`      | binary it shells out to | auth                                  | endpoint                |
-|------------------|-------------------------|---------------------------------------|-------------------------|
-| `pi-proxy` (default) | `pi` (One Ping agent CLI)        | `KIMI_API_KEY` env var               | Moonshot `kimi-coding`  |
-| `claude-code`    | `claude` (Claude Code CLI)       | your Claude Code subscription/auth   | Anthropic               |
+| `--backend`      | transport               | auth                                  | endpoint                | repo tools |
+|------------------|-------------------------|---------------------------------------|-------------------------|------------|
+| `pi-proxy` (default) | shells out to `pi` (One Ping agent CLI) | `KIMI_API_KEY` env var | Moonshot `kimi-coding`  | yes (read-only) |
+| `claude-code`    | shells out to `claude` (Claude Code CLI) | your Claude Code subscription/auth | Anthropic | yes (read-only) |
+| `gemini`         | **direct HTTP** (`ureq`) | `GEMINI_API_KEY` env var | Gemini OpenAI-compat API | no |
 
-Both backends pass a **read-only** tool allowlist (`Read`/`Grep`/`Glob`
-or equivalent) to the underlying agent. The allowlist is hardcoded in
+`pi-proxy` and `claude-code` shell out to a local **agent** CLI per LLM
+call: the agent runs the model + tool-use loop and can `Read`/`Grep`/`Glob`
+the repo under review. The allowlist is hardcoded in
 `pi_proxy.rs`/`claude_code.rs` and cannot be widened from outside —
 council can never run `Bash`, `Edit`, or `Write`.
+
+`gemini` is different: there is no Gemini agent CLI, so this backend is a
+direct blocking HTTP client against Gemini's OpenAI-compatible
+chat-completions endpoint. It has **no repo tool access** — it sees only
+the pre-packed prompt the pipeline builds (diff + AST scope +
+related-file context). That makes it the cheapest backend to operate
+(one API key, no local CLI install) and the "pre-packed context, no
+tools" arm of the backend experiment. Transient failures (`408`/`425`/
+`429`/`5xx` + transport errors) are retried with exponential backoff.
 
 Backend-specific environment knobs:
 
@@ -387,6 +400,10 @@ PI_BIN=/custom/path/to/pi PI_MODEL=kimi-k2-thinking aatxe council --pr 42
 CLAUDE_BIN=/custom/path/to/claude CLAUDE_MODEL=opus \
     CLAUDE_MAX_BUDGET_USD=2.0 \
     aatxe council --pr 42 --backend claude-code
+
+# gemini (direct API; model via GEMINI_MODEL or --model, default gemini-2.5-flash)
+GEMINI_API_KEY=... GEMINI_MODEL=gemini-2.5-pro \
+    aatxe council --pr 42 --backend gemini
 ```
 
 ### Streaming pipeline events
@@ -524,14 +541,29 @@ jobs:
 
 ### Bench coverage
 
-The council's pure pipeline is benched with `aatxe-bench` itself —
-the same stats engine that judges aatxe's own perf regressions also
-judges the council's. See `examples/council-bench/`. The suite
-(`make council-bench`) covers diff parsing, path filtering, chunking,
-prompt assembly, JSON response parsing, deterministic synthesis, and the
-end-to-end `run_council` orchestration against a stub LLM. `make
-council-bench-self` proves the perf gate would catch a regression in the
-council itself by comparing the bench output against its own baseline.
+Aatxe benches its own hot code with `aatxe-bench` — the same stats engine
+that judges downstream consumers' perf also judges aatxe's. Four self-bench
+suites, each emitting a `RunReport` the comparator ingests:
+
+| Suite | Service tag | Covers | Run |
+| --- | --- | --- | --- |
+| `examples/council-bench/` | `aatxe-council` | diff parse · filter · chunk · prompt build · JSON parse · synth · stub `run_council` | `make council-bench` |
+| `examples/core-bench/` | `aatxe-core` | `summarize_samples` · Mann–Whitney U · MAD · Welch-t · `compare_reports` · affected import extractor | `make core-bench` |
+| `examples/ast-bench/` | `aatxe-ast` | tree-sitter `describe` (Rust/TS/Go) · `render_scope_block` | `make ast-bench` |
+| `examples/big-diff-bench/` | `aatxe-big-diff` | large-diff parse cost | — |
+
+`core-bench` and `ast-bench` target the most compute-intensive,
+network-free code in the project: the statistical brain that runs on
+*every* gate and the tree-sitter parser that dominates the council's
+pre-LLM cost. Workloads are frozen (deterministic PRNG / committed source
+snapshots) so the gate doesn't drift.
+
+Each suite has a `*-bench-self` target (`make core-bench-self`, etc.) that
+compares its output against itself to prove the render + gate path works,
+and the **`aatxe-self-bench.yml`** workflow runs all of them HEAD-vs-base on
+every PR and fails the lane on a regression — aatxe gating itself with
+aatxe. Locally, `aatxe perf-vs --bench core|ast|council|big-diff|all
+--against <ref>` does the same A/B across a sibling worktree.
 
 ### Environment
 

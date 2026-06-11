@@ -12,6 +12,7 @@ mod claude_code;
 mod cli;
 mod commands;
 mod curator;
+mod gemini_http;
 mod gh_diff;
 mod github_http;
 mod pi_proxy;
