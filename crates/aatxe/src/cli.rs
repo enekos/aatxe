@@ -677,10 +677,12 @@ pub struct UiArgs {
     /// Seconds between dirty-checks of each agent worktree.
     #[arg(long, default_value_t = 15)]
     pub poll_secs: u64,
-    /// Use the deterministic offline stub agent instead of `claude` —
-    /// scripted edits, no LLM. For demos and harness verification.
-    #[arg(long)]
-    pub stub_agent: bool,
+    /// Which backend drives spawned coding agents.
+    #[arg(long, value_enum, default_value_t = UiAgentArg::Claude)]
+    pub agent_backend: UiAgentArg,
+    /// Model for the gemini backend (default `gemini-2.5-flash`).
+    #[arg(long, env = "GEMINI_MODEL")]
+    pub gemini_model: Option<String>,
     /// Council lane mode for finished agents.
     #[arg(long, value_enum, default_value_t = UiCouncilArg::Stub)]
     pub council: UiCouncilArg,
@@ -708,6 +710,17 @@ pub struct UiArgs {
     /// Confidence floor forwarded to council runs.
     #[arg(long, default_value_t = 0.55)]
     pub confidence_floor: f64,
+}
+
+#[cfg(feature = "ui")]
+#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum UiAgentArg {
+    /// Shell out to the local `claude` CLI in print mode (subscription auth).
+    Claude,
+    /// Native tool-use loop over the Gemini API. Requires `GEMINI_API_KEY`.
+    Gemini,
+    /// Deterministic offline scripted runner — demos and harness checks.
+    Stub,
 }
 
 #[cfg(feature = "ui")]

@@ -23,6 +23,7 @@ pub mod bench;
 pub mod bus;
 pub mod council;
 pub mod events;
+pub mod gemini;
 pub mod runner;
 pub mod server;
 pub mod state;
@@ -30,6 +31,7 @@ pub mod tournament;
 pub mod watch;
 
 pub use bench::BenchSpec;
+pub use gemini::GeminiAgentConfig;
 pub use runner::{default_allowed_tools, AgentBackend};
 pub use state::{CouncilMode, UiConfig};
 

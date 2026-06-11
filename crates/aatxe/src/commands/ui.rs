@@ -4,7 +4,7 @@
 //! resolves defaults that need the CLI's context (repo root discovery,
 //! bench-arg → bench-spec mapping, session id, current exe).
 
-use crate::cli::{PerfBenchArg, UiArgs, UiCouncilArg};
+use crate::cli::{PerfBenchArg, UiAgentArg, UiArgs, UiCouncilArg};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,19 +26,36 @@ pub fn execute(args: UiArgs) -> Result<()> {
         ),
     };
 
-    let backend = if args.stub_agent {
-        aatxe_ui::AgentBackend::Stub {
+    let backend = match args.agent_backend {
+        UiAgentArg::Stub => aatxe_ui::AgentBackend::Stub {
             edits: 3,
             sleep_ms: 4_000,
-        }
-    } else {
-        aatxe_ui::AgentBackend::ClaudeCode {
+        },
+        UiAgentArg::Claude => aatxe_ui::AgentBackend::ClaudeCode {
             binary: args
                 .claude_binary
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("claude")),
             model: args.model.clone(),
             allowed_tools: aatxe_ui::default_allowed_tools(),
+        },
+        UiAgentArg::Gemini => {
+            let api_key = std::env::var("GEMINI_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "GEMINI_API_KEY is not set. Export it (or point GEMINI_ENV at an \
+                         env file and use `make ui`, which sources it for you)."
+                    )
+                })?;
+            aatxe_ui::AgentBackend::Gemini(aatxe_ui::GeminiAgentConfig::new(
+                api_key,
+                args.gemini_model.clone(),
+                std::env::var("GEMINI_BASE_URL")
+                    .ok()
+                    .filter(|s| !s.is_empty()),
+            ))
         }
     };
 

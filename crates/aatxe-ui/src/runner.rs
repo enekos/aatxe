@@ -11,10 +11,14 @@
 //! * `Stub` is the deterministic offline runner: it appends lines to a
 //!   scratch file on a timer, which drives the dirty-poll → bench loop
 //!   end-to-end with zero network and zero LLM spend. Used by tests and
-//!   by `aatxe ui --stub-agent` demo runs.
+//!   by `aatxe ui --agent-backend stub` demo runs.
+//! * `Gemini` is a *native* tool-use loop over the Gemini API (no local
+//!   agent CLI exists for it) — see [`crate::gemini`]. One
+//!   `GEMINI_API_KEY` drives both this and the council's gemini backend.
 
 use crate::events::AgentOutputKind;
-use anyhow::{Context, Result};
+use crate::gemini::{run_gemini_agent, GeminiAgentConfig};
+use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -31,6 +35,7 @@ pub enum AgentBackend {
         model: Option<String>,
         allowed_tools: Vec<String>,
     },
+    Gemini(GeminiAgentConfig),
     Stub {
         edits: u32,
         sleep_ms: u64,
@@ -85,6 +90,17 @@ pub async fn run_agent(
     match backend {
         AgentBackend::Stub { edits, sleep_ms } => {
             run_stub(*edits, *sleep_ms, worktree, emit).await?;
+            Ok(Some(0))
+        }
+        AgentBackend::Gemini(cfg) => {
+            // The Gemini loop is blocking (ureq + std::process), matching
+            // the rest of aatxe; isolate it on the blocking pool.
+            let cfg = cfg.clone();
+            let task = task.to_string();
+            let wt = worktree.to_path_buf();
+            tokio::task::spawn_blocking(move || run_gemini_agent(&cfg, &task, &wt, emit))
+                .await
+                .map_err(|e| anyhow!("gemini agent task panicked: {e}"))??;
             Ok(Some(0))
         }
         AgentBackend::ClaudeCode {

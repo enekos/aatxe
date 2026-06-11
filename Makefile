@@ -262,20 +262,27 @@ perf-vs-self: $(TMP) build-rust ## Smoke test: perf-vs against HEAD~1 (or origin
 # trajectories + council verdicts + tournament standings to the browser.
 #
 # Knobs (all optional):
-#   UI_PORT   — port to bind. Default 4866.
-#   UI_FLAGS  — extra flags, e.g. `--stub-agent --council stub --no-open`.
+#   UI_PORT     — port to bind. Default 4866.
+#   UI_BACKEND  — agent backend: gemini (default) / claude / stub.
+#   GEMINI_ENV  — env file sourced before launch (provides GEMINI_API_KEY).
+#                 Defaults to the first of: ./.env, the jobs-ai-prompt-lab
+#                 checkout next to this repo's parent.
+#   UI_FLAGS    — extra flags, e.g. `--council real --no-open`.
 
-UI_PORT ?= 4866
+UI_PORT    ?= 4866
+UI_BACKEND ?= gemini
+GEMINI_ENV ?= $(firstword $(wildcard .env $(HOME)/eneko_projects/jobs-ai-prompt-lab/.env))
 
 .PHONY: ui
-ui: build-rust ## Launch the local realtime dashboard on $(UI_PORT). Knobs: UI_PORT, UI_FLAGS.
+ui: build-rust ## Launch the dashboard on $(UI_PORT) with the $(UI_BACKEND) agent backend. Knobs: UI_PORT, UI_BACKEND, GEMINI_ENV, UI_FLAGS.
 	$(call say,ui)
-	$(AATXE_BIN) ui --port $(UI_PORT) $(UI_FLAGS)
+	@set -a; if [ -n "$(GEMINI_ENV)" ] && [ -f "$(GEMINI_ENV)" ]; then . "$(GEMINI_ENV)"; fi; set +a; \
+	exec $(AATXE_BIN) ui --port $(UI_PORT) --agent-backend $(UI_BACKEND) $(UI_FLAGS)
 
 .PHONY: ui-demo
 ui-demo: build-rust ## Dashboard demo: offline stub agent + stub council, no LLM spend. Spawn an agent from the browser to watch the full loop.
 	$(call say,ui-demo)
-	$(AATXE_BIN) ui --port $(UI_PORT) --stub-agent --council stub
+	$(AATXE_BIN) ui --port $(UI_PORT) --agent-backend stub --council stub
 
 .PHONY: council-dry-run
 council-dry-run: $(TMP) build-rust ## Pipe the bundled council fixture diff through `aatxe council`. Requires KIMI_API_KEY.
