@@ -190,6 +190,53 @@ func (s *Suite) benchInternal(name, file string, opts Options, fn func()) {
 	s.runs = append(s.runs, summarise(name, file, samples, batchSize, elapsedNs))
 }
 
+// BenchParam measures fn once per parameter under [DefaultOptions],
+// recording one BenchRun named "name/param" per entry (labelled via
+// fmt.Sprint). A regression that appears only at large params reads as a
+// complexity change rather than a constant-factor one:
+//
+//	aatxe.BenchParam(s, "parse", []int{10, 1_000, 100_000}, func(n int) {
+//	    aatxe.Keep(parse(inputs[n]))
+//	})
+//
+// Free function rather than a Suite method because Go methods cannot
+// declare their own type parameters.
+func BenchParam[P any](s *Suite, name string, params []P, fn func(p P)) {
+	benchParam(s, name, callerFile(2), DefaultOptions(), params, fn)
+}
+
+// BenchParamWith is the full-control form of [BenchParam]. The source-file
+// tag is taken from opts.File when set, otherwise derived from
+// runtime.Caller.
+func BenchParamWith[P any](s *Suite, name string, opts Options, params []P, fn func(p P)) {
+	file := opts.File
+	if file == "" {
+		file = callerFile(2)
+	}
+	benchParam(s, name, file, opts, params, fn)
+}
+
+// benchParam panics on registration mistakes (empty params, params whose
+// fmt.Sprint forms collide) — failing loud at bench-author time beats
+// emitting a report whose run names silently shadow each other.
+func benchParam[P any](s *Suite, name, file string, opts Options, params []P, fn func(p P)) {
+	if len(params) == 0 {
+		panic(fmt.Sprintf("aatxe: BenchParam %q: empty params", name))
+	}
+	seen := make(map[string]bool, len(params))
+	for _, p := range params {
+		label := fmt.Sprint(p)
+		if seen[label] {
+			panic(fmt.Sprintf(
+				"aatxe: BenchParam %q: params print to duplicate label %q — use values with unique fmt.Sprint forms",
+				name, label,
+			))
+		}
+		seen[label] = true
+		s.benchInternal(name+"/"+label, file, opts, func() { fn(p) })
+	}
+}
+
 // callerFile returns a repo-relative path to the source file `skip` frames
 // up the stack. Falls back to "<inline>" if runtime.Caller fails.
 func callerFile(skip int) string {

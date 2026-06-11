@@ -27,7 +27,7 @@ on:
       threshold:
         description: "Median-delta regression threshold (fraction)"
         required: false
-        default: '0.05'
+        default: '0.12'
         type: string
       alpha:
         description: "Mann-Whitney U significance level"
@@ -46,7 +46,19 @@ permissions:
 env:
   # Each self-bench example binary + the service tag the comparator pairs on.
   # Keep in sync with examples/*/Cargo.toml and the perf-vs PerfBenchArg enum.
-  THRESHOLD: ${{ github.event.inputs.threshold || '0.05' }}
+  #
+  # Threshold is 0.12, NOT the 0.05 a downstream consumer would use. These
+  # benches are tiny, allocation-bound microbenchmarks (prompt assembly, JSON
+  # parse, dedup) and HEAD vs base are measured in *separate phases* — a git
+  # checkout + cargo rebuild churns caches/thermals between them. That
+  # systematic between-phase drift runs ~5-9% on shared GH-hosted runners; at
+  # n=200 samples even a 5% offset gives p≈0, so the significance signal can't
+  # filter it and the CV noise-gate (<0.25) still passes. Measured empirically:
+  # two runs of identical code flap regression/improvement at a 0.05 gate.
+  # 0.12 clears that noise floor while still catching a real regression in
+  # pure-Rust hot code. (Tracked: a best-of-N / interleaved harness would let
+  # this drop back toward 0.05.)
+  THRESHOLD: ${{ github.event.inputs.threshold || '0.12' }}
   ALPHA: ${{ github.event.inputs.alpha || '0.05' }}
 
 jobs:
@@ -82,6 +94,17 @@ jobs:
       - name: Bench HEAD
         run: |
           mkdir -p /tmp/head
+          # Process-level warm-up: the harness only does 5 *intra-process*
+          # warmup batches, which don't cover the cold-start of a freshly
+          # exec'd, freshly-built binary — code pages and CPU caches are cold,
+          # so the FIRST benches in the suite (e.g. diff::parse_unified_diff)
+          # read systematically slow. HEAD and base are built + run cold in
+          # separate phases, so that cold-start lands asymmetrically and shows
+          # up as a phantom regression. A throwaway run warms the binary so the
+          # measured run is steady-state on both sides.
+          for b in core ast council; do
+            "/tmp/aatxe-bin/aatxe-${b}-bench" > /dev/null 2>&1 || true
+          done
           AATXE_SERVICE=aatxe-core    AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-core-bench    > /tmp/head/core.json
           AATXE_SERVICE=aatxe-ast     AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-ast-bench     > /tmp/head/ast.json
           AATXE_SERVICE=aatxe-council AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-council-bench > /tmp/head/council.json
@@ -106,6 +129,9 @@ jobs:
             bin="target/release/aatxe-${svc}-bench"
             rm -f "$bin"
             if cargo build --release --bin "aatxe-${svc}-bench" 2>/dev/null && [ -x "$bin" ]; then
+              # Throwaway warm-up run (see "Bench HEAD") so base is measured at
+              # steady state too — symmetric with HEAD, kills cold-start drift.
+              "$bin" > /dev/null 2>&1 || true
               AATXE_SERVICE="aatxe-${svc}" AATXE_REF="${{ github.base_ref }}" "$bin" > "/tmp/base/${svc}.json" \
                 && echo "    ✓ base benched: ${svc}" \
                 || echo "    → base bench failed for ${svc} (treated as new)"

@@ -145,3 +145,71 @@ test('only flag is preserved on the resolved bench', () => {
   assert.equal(list[0]!.options.only, false)
   assert.equal(list[1]!.options.only, true)
 })
+
+test('params expands one registration per param, named name/param', () => {
+  _internal.clear()
+  bench('parse', () => undefined, { params: [10, 1e3, 1e5] })
+  const names = _internal.list().map(b => b.name)
+  assert.deepEqual(names, ['parse/10', 'parse/1000', 'parse/100000'])
+})
+
+test('params are passed as the second argument to the bench fn', () => {
+  _internal.clear()
+  const seen: number[] = []
+  bench<void, number>('sized', (_fixture, n) => { seen.push(n) }, { params: [1, 2, 3] })
+  for (const b of _internal.list()) b.fn(undefined, undefined)
+  assert.deepEqual(seen, [1, 2, 3])
+})
+
+test('params flow into setup as its first argument', async () => {
+  _internal.clear()
+  bench<number[], number>(
+    'with-fixture',
+    fixture => { keep(fixture.length) },
+    { params: [4, 8], setup: n => new Array(n).fill(0) },
+  )
+  const fixtures = await Promise.all(
+    _internal.list().map(b => b.options.setup!()),
+  ) as number[][]
+  assert.deepEqual(fixtures.map(f => f.length), [4, 8])
+})
+
+test('empty params array is rejected', () => {
+  _internal.clear()
+  assert.throws(() => bench('none', () => undefined, { params: [] }), /empty params/)
+})
+
+test('params with duplicate String() forms are rejected', () => {
+  _internal.clear()
+  assert.throws(
+    () => bench('objs', () => undefined, { params: [{ a: 1 }, { b: 2 }] }),
+    /duplicate label/,
+  )
+})
+
+test('param expansion collides with explicit names via the duplicate check', () => {
+  _internal.clear()
+  bench('parse/10', () => undefined)
+  assert.throws(() => bench('parse', () => undefined, { params: [10] }), /duplicate bench name/)
+})
+
+test('binding a param preserves declared asyncness for the runner', () => {
+  _internal.clear()
+  bench('sync-fn', () => undefined, { params: [1] })
+  bench('async-fn', async () => undefined, { params: [1] })
+  const list = _internal.list()
+  const ctorName = (fn: unknown): string =>
+    (fn as { constructor: { name: string } }).constructor.name
+  assert.equal(ctorName(list.find(b => b.name === 'sync-fn/1')!.fn), 'Function')
+  assert.equal(ctorName(list.find(b => b.name === 'async-fn/1')!.fn), 'AsyncFunction')
+})
+
+test('per-bench options apply to every expanded param variant', () => {
+  _internal.clear()
+  bench('tuned', () => undefined, { params: [1, 2], iterations: 7, only: true })
+  for (const b of _internal.list()) {
+    assert.equal(b.options.minIterations, 7)
+    assert.equal(b.options.maxIterations, 7)
+    assert.equal(b.options.only, true)
+  }
+})

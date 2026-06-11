@@ -145,6 +145,43 @@ impl Suite {
         });
     }
 
+    /// Parameterized form of [`Suite::run`]: one [`BenchRun`] per param,
+    /// named `name/param` (via the param's `Display` form). The closure
+    /// receives the current param on every invocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics on registration mistakes — an empty `params` slice, or two
+    /// params whose `Display` forms collide (their run names would
+    /// silently shadow each other in the report).
+    pub fn run_param<P, F>(
+        &mut self,
+        name: &str,
+        opts: Options,
+        file: &str,
+        params: &[P],
+        mut fn_: F,
+    ) where
+        P: std::fmt::Display,
+        F: FnMut(&P),
+    {
+        assert!(
+            !params.is_empty(),
+            "aatxe: bench_param {name:?}: empty params"
+        );
+        let mut labels: Vec<String> = Vec::with_capacity(params.len());
+        for p in params {
+            let label = p.to_string();
+            assert!(
+                !labels.contains(&label),
+                "aatxe: bench_param {name:?}: params display as duplicate label {label:?} — \
+                 use values with unique Display forms"
+            );
+            self.run(&format!("{name}/{label}"), opts, file, || fn_(p));
+            labels.push(label);
+        }
+    }
+
     /// Finalise and emit the report as a JSON [`RunReport`] on stdout.
     /// Use this from your runner's `main()` so `aatxe run --lang rust` can
     /// ingest the output.
@@ -171,6 +208,23 @@ impl Suite {
 /// Convenience wrapper that uses default [`Options`] and a synthetic file tag.
 pub fn bench<F: FnMut()>(suite: &mut Suite, name: &str, fn_: F) {
     suite.run(name, Options::default(), "<inline>", fn_);
+}
+
+/// Parameterized convenience wrapper: one [`aatxe_core::types::BenchRun`]
+/// per param, named `name/param`. A regression that appears only at large
+/// params reads as a complexity change rather than a constant-factor one.
+///
+/// ```ignore
+/// bench_param(&mut suite, "parse", &[10, 1_000, 100_000], |n| {
+///     keep(parse(&inputs[n]));
+/// });
+/// ```
+pub fn bench_param<P, F>(suite: &mut Suite, name: &str, params: &[P], fn_: F)
+where
+    P: std::fmt::Display,
+    F: FnMut(&P),
+{
+    suite.run_param(name, Options::default(), "<inline>", params, fn_);
 }
 
 /// Sampling loop. Returns the per-iteration durations (in ns), the resolved
@@ -384,6 +438,81 @@ mod tests {
         let v = keep(7u64);
         let w = black_box(v.wrapping_add(1));
         assert_eq!(w, 8);
+    }
+
+    fn fast_opts() -> Options {
+        Options {
+            batch_size: BatchSize::Fixed(4),
+            min_iterations: 2,
+            max_iterations: 2,
+            warmup: 0,
+            time_budget: Duration::from_millis(10),
+            target_cv: 0.0,
+        }
+    }
+
+    #[test]
+    fn bench_param_expands_one_run_per_param() {
+        let mut s = Suite::new("svc");
+        s.run_param(
+            "parse",
+            fast_opts(),
+            "<inline>",
+            &[10, 1_000, 100_000],
+            |n| {
+                keep(n * 2);
+            },
+        );
+        let r = s.into_report();
+        let names: Vec<&str> = r.runs.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, vec!["parse/10", "parse/1000", "parse/100000"]);
+    }
+
+    #[test]
+    fn bench_param_passes_each_value_to_fn() {
+        let mut s = Suite::new("svc");
+        let mut seen = std::collections::BTreeSet::new();
+        s.run_param("sized", fast_opts(), "<inline>", &[1u64, 2, 3], |n| {
+            seen.insert(*n);
+        });
+        assert_eq!(seen.into_iter().collect::<Vec<_>>(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn bench_param_supports_string_params() {
+        let mut s = Suite::new("svc");
+        s.run_param("codec", fast_opts(), "<inline>", &["json", "proto"], |c| {
+            keep(c.len());
+        });
+        let r = s.into_report();
+        assert_eq!(r.runs[0].name, "codec/json");
+        assert_eq!(r.runs[1].name, "codec/proto");
+    }
+
+    #[test]
+    fn bench_param_default_wrapper_uses_default_options() {
+        let mut s = Suite::new("svc");
+        bench_param(&mut s, "wrapped", &[7], |n| {
+            keep(*n + 1);
+        });
+        let r = s.into_report();
+        assert_eq!(r.runs.len(), 1);
+        assert_eq!(r.runs[0].name, "wrapped/7");
+        assert!(r.runs[0].iterations >= 30, "default min_iterations");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty params")]
+    fn bench_param_panics_on_empty_params() {
+        let mut s = Suite::new("svc");
+        s.run_param("none", fast_opts(), "<inline>", &[] as &[u32], |_| {});
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate label")]
+    fn bench_param_panics_on_duplicate_labels() {
+        let mut s = Suite::new("svc");
+        s.run_param("dup", fast_opts(), "<inline>", &[1, 1], |_| {});
     }
 
     #[test]

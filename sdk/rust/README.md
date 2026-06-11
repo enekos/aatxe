@@ -27,6 +27,16 @@ fn main() {
 
 The runner emits a single `RunReport` JSON on stdout. Wire it into `aatxe run --lang rust` and aatxe compares head vs. base, posts a sticky PR comment, and gates CI when a regression is statistically real.
 
+Parameterize over input sizes with `bench_param` — one `BenchRun` per entry, named `name/param` (via the param's `Display` form, which must be unique per entry). `Suite::run_param` is the full-control form taking `Options`:
+
+```rust
+use aatxe_bench::bench_param;
+
+bench_param(&mut suite, "parse", &[10u64, 1_000, 100_000], |n| {
+    keep(parse(&make_input(*n)));
+});
+```
+
 ## Why a builder, not `#[bench]`?
 
 The stable Rust toolchain does not ship `#[bench]`. Criterion is the standard alternative but introduces a heavy dependency tree and an HTML-report-centric flow. `aatxe-bench` instead exposes a small builder that integrates cleanly with `cargo run --release` — predictable, statically typed, and trivial to embed in CI.

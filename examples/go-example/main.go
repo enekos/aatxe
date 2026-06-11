@@ -27,5 +27,9 @@ func main() {
 		b.WriteString("world")
 		_ = b.String()
 	})
+	// Parameterized: one BenchRun per repeat count ("strings_repeat/8" etc.).
+	aatxe.BenchParam(s, "strings_repeat", []int{8, 256}, func(n int) {
+		aatxe.Keep(strings.Repeat("x", n))
+	})
 	s.EmitStdout()
 }

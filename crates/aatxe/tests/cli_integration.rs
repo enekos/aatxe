@@ -126,7 +126,171 @@ fn help_lists_all_subcommands() {
         .stdout(contains("report"))
         .stdout(contains("comment"))
         .stdout(contains("affected"))
-        .stdout(contains("list"));
+        .stdout(contains("list"))
+        .stdout(contains("baseline"));
+}
+
+#[test]
+fn baseline_save_then_compare_against_local_gates_regression() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("baselines");
+    let base_samples: Vec<f64> = (100..160).map(|x| x as f64).collect();
+    let head_samples: Vec<f64> = base_samples.iter().map(|x| x * 1.3).collect();
+    let base = write_fixture(&tmp, "aatxe.json", &run_report(&base_samples, "rust"));
+    let head = write_fixture(&tmp, "head.json", &run_report(&head_samples, "rust"));
+
+    Command::cargo_bin("aatxe")
+        .unwrap()
+        .args([
+            "baseline",
+            "save",
+            "--report",
+            base.to_str().unwrap(),
+            "--dir",
+            dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(contains("saved baseline 'default'"));
+
+    let out_json = tmp.path().join("cmp.json");
+    Command::cargo_bin("aatxe")
+        .unwrap()
+        .args([
+            "compare",
+            "--against-local",
+            "--baseline-dir",
+            dir.to_str().unwrap(),
+            "--head",
+            head.to_str().unwrap(),
+            "--out",
+            out_json.to_str().unwrap(),
+            "--fail-on-regression",
+        ])
+        .assert()
+        .code(2)
+        .stderr(contains("base = local baseline 'default'"));
+
+    let cmp: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out_json).unwrap()).unwrap();
+    assert_eq!(cmp["summary"]["regressions"], 1);
+}
+
+#[test]
+fn compare_against_local_without_saved_baseline_hints_at_save() {
+    let tmp = TempDir::new().unwrap();
+    let head_samples: Vec<f64> = (100..160).map(|x| x as f64).collect();
+    let head = write_fixture(&tmp, "head.json", &run_report(&head_samples, "rust"));
+    Command::cargo_bin("aatxe")
+        .unwrap()
+        .args([
+            "compare",
+            "--against-local",
+            "--baseline-dir",
+            tmp.path().to_str().unwrap(),
+            "--head",
+            head.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stderr(contains("aatxe baseline save"));
+}
+
+#[test]
+fn compare_rejects_base_combined_with_against_local() {
+    Command::cargo_bin("aatxe")
+        .unwrap()
+        .args([
+            "compare",
+            "--base",
+            "x.json",
+            "--against-local",
+            "--head",
+            "y.json",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("cannot be used with"));
+}
+
+#[test]
+fn compare_requires_base_or_against_local() {
+    Command::cargo_bin("aatxe")
+        .unwrap()
+        .args(["compare", "--head", "y.json"])
+        .assert()
+        .failure()
+        .stderr(contains("--base"));
+}
+
+#[test]
+fn baseline_list_and_rm_round_trip() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("baselines");
+    let samples: Vec<f64> = (100..160).map(|x| x as f64).collect();
+    let report = write_fixture(&tmp, "aatxe.json", &run_report(&samples, "go"));
+
+    for name in ["default", "experiment"] {
+        Command::cargo_bin("aatxe")
+            .unwrap()
+            .args([
+                "baseline",
+                "save",
+                "--report",
+                report.to_str().unwrap(),
+                "--name",
+                name,
+                "--dir",
+                dir.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+    }
+
+    Command::cargo_bin("aatxe")
+        .unwrap()
+        .args(["baseline", "list", "--dir", dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("default"))
+        .stdout(contains("experiment"));
+
+    Command::cargo_bin("aatxe")
+        .unwrap()
+        .args([
+            "baseline",
+            "rm",
+            "--name",
+            "experiment",
+            "--dir",
+            dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(!dir.join("experiment.json").exists());
+    assert!(dir.join("default.json").exists());
+}
+
+#[test]
+fn baseline_save_rejects_path_traversal_names() {
+    let tmp = TempDir::new().unwrap();
+    let samples: Vec<f64> = (100..160).map(|x| x as f64).collect();
+    let report = write_fixture(&tmp, "aatxe.json", &run_report(&samples, "ts"));
+    Command::cargo_bin("aatxe")
+        .unwrap()
+        .args([
+            "baseline",
+            "save",
+            "--report",
+            report.to_str().unwrap(),
+            "--name",
+            "../escape",
+            "--dir",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stderr(contains("invalid baseline name"));
 }
 
 #[test]

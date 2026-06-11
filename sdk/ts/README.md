@@ -19,6 +19,20 @@ route them to the async hot loop. A sync-shaped function that returns a
 Promise (e.g. `() => fetch(...)`) will be timed as sync, producing
 nonsense — wrap it: `async () => fetch(...)`.
 
+Parameterize over input sizes with `params` — one `BenchRun` per entry,
+named `name/param`. The param arrives as the fn's second argument and as
+`setup`'s first:
+
+```ts
+bench<number[], number>('serialise', arr => { keep(JSON.stringify(arr)) }, {
+  params: [10, 1e3, 1e5],
+  setup: n => makeInput(n),
+})
+```
+
+Params must stringify uniquely (`String(param)` becomes the run-name
+suffix), so prefer numbers and strings over objects.
+
 Run them locally:
 
 ```bash
