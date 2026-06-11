@@ -1,0 +1,188 @@
+# Self-bench workflow — aatxe gating its own performance with aatxe.
+#
+# The most meta lane in the repo: it builds aatxe's own microbenchmark
+# binaries (`core-bench`, `ast-bench`, `council-bench`), runs them on HEAD,
+# runs them again on the PR base, and pipes both through `aatxe compare`
+# — the exact comparator a downstream consumer's gate uses. A regression in
+# the statistical brain (`aatxe-core`) or the tree-sitter scope extractor
+# (`aatxe-ast`) now fails aatxe's own PR queue.
+#
+# Base-tolerant by design: when a bench binary doesn't exist on the base ref
+# yet (e.g. the PR that introduces it), the base run is skipped and the
+# comparison degrades to "every bench is New" — informational, never gating.
+# Once a bench has landed on master, subsequent PRs get a real HEAD-vs-base
+# gate.
+#
+# Under `act` (no PR base), the workflow self-compares HEAD against itself so
+# the full bench → compare → render → marker pipeline is still exercised.
+
+name: aatxe-self-bench
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: "Median-delta regression threshold (fraction)"
+        required: false
+        default: '0.05'
+        type: string
+      alpha:
+        description: "Mann-Whitney U significance level"
+        required: false
+        default: '0.05'
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  # Each self-bench example binary + the service tag the comparator pairs on.
+  # Keep in sync with examples/*/Cargo.toml and the perf-vs PerfBenchArg enum.
+  THRESHOLD: ${{ github.event.inputs.threshold || '0.05' }}
+  ALPHA: ${{ github.event.inputs.alpha || '0.05' }}
+
+jobs:
+  self-bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout HEAD
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build aatxe CLI + bench binaries (HEAD)
+        run: |
+          cargo build --release \
+            --bin aatxe \
+            --bin aatxe-core-bench \
+            --bin aatxe-ast-bench \
+            --bin aatxe-council-bench
+          # Stash HEAD artefacts so the base checkout can't clobber them.
+          mkdir -p /tmp/aatxe-bin
+          cp target/release/aatxe              /tmp/aatxe-bin/
+          cp target/release/aatxe-core-bench   /tmp/aatxe-bin/
+          cp target/release/aatxe-ast-bench    /tmp/aatxe-bin/
+          cp target/release/aatxe-council-bench /tmp/aatxe-bin/
+
+      - name: Bench HEAD
+        run: |
+          mkdir -p /tmp/head
+          AATXE_SERVICE=aatxe-core    AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-core-bench    > /tmp/head/core.json
+          AATXE_SERVICE=aatxe-ast     AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-ast-bench     > /tmp/head/ast.json
+          AATXE_SERVICE=aatxe-council AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-council-bench > /tmp/head/council.json
+          echo "    ✓ HEAD benched (core / ast / council)"
+
+      - name: Bench base (best-effort — base may predate a bench)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p /tmp/base
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          git checkout -q "origin/${{ github.base_ref }}"
+          # Build the bench bins as they exist on the base ref. Any that
+          # don't compile/exist there are simply absent → their HEAD benches
+          # show up as New, not as regressions.
+          cargo build --release \
+            --bin aatxe-core-bench \
+            --bin aatxe-ast-bench \
+            --bin aatxe-council-bench
+          for svc in core ast council; do
+            bin="target/release/aatxe-${svc}-bench"
+            if [ -x "$bin" ]; then
+              AATXE_SERVICE="aatxe-${svc}" AATXE_REF="${{ github.base_ref }}" "$bin" > "/tmp/base/${svc}.json" \
+                && echo "    ✓ base benched: ${svc}" \
+                || echo "    → base bench failed for ${svc} (treated as new)"
+            else
+              echo "    → no base binary for ${svc} (new bench — informational only)"
+            fi
+          done
+          git checkout -q -
+
+      - name: Compare + gate (per service)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          regressed=0
+          : > /tmp/self-bench-report.md
+          for svc in core ast council; do
+            head="/tmp/head/${svc}.json"
+            base="/tmp/base/${svc}.json"
+            out="/tmp/${svc}-cmp.json"
+            md="/tmp/${svc}-cmp.md"
+            if [ -f "$base" ]; then
+              echo "### aatxe-${svc} (HEAD vs ${{ github.base_ref }})" >> /tmp/self-bench-report.md
+              if /tmp/aatxe-bin/aatxe compare \
+                   --base "$base" --head "$head" \
+                   --threshold "$THRESHOLD" --alpha "$ALPHA" \
+                   --markdown "$md" --out "$out" \
+                   --fail-on-regression; then
+                echo "    ✓ aatxe-${svc}: no regression"
+              else
+                code=$?
+                if [ "$code" = "2" ]; then
+                  echo "    ✗ aatxe-${svc}: REGRESSION (exit 2)"
+                  regressed=1
+                else
+                  echo "    ! aatxe-${svc}: compare errored (exit $code)"; exit "$code"
+                fi
+              fi
+            else
+              # No base baseline — self-compare so we still render + prove
+              # the pipeline, but never gate on it.
+              echo "### aatxe-${svc} (new bench — no base baseline)" >> /tmp/self-bench-report.md
+              /tmp/aatxe-bin/aatxe compare \
+                --base "$head" --head "$head" \
+                --markdown "$md" --out "$out"
+              echo "    → aatxe-${svc}: new bench, informational self-compare"
+            fi
+            cat "$md" >> /tmp/self-bench-report.md
+            echo "" >> /tmp/self-bench-report.md
+          done
+          echo "REGRESSED=$regressed" >> "$GITHUB_ENV"
+
+      - name: Assert pipeline produced a report with the sticky marker
+        run: |
+          test -s /tmp/self-bench-report.md || { echo "✗ no report produced"; exit 1; }
+          grep -q '<!-- aatxe:report -->' /tmp/self-bench-report.md \
+            || { echo "✗ sticky marker missing — render path broken"; exit 1; }
+          echo "    ✓ self-bench report rendered with sticky marker"
+
+      - name: Upload self-bench artefacts
+        # Non-fatal: the artefact is a convenience, not part of the gate, and
+        # the upload service shouldn't be able to fail the perf lane. (Also
+        # keeps the workflow green under `act`, which has no runtime token.)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: aatxe-self-bench
+          path: |
+            /tmp/head/*.json
+            /tmp/*-cmp.json
+            /tmp/self-bench-report.md
+          if-no-files-found: ignore
+
+      - name: Gate on regressions
+        run: |
+          if [ "${REGRESSED:-0}" = "1" ]; then
+            echo "::error::aatxe self-bench detected a performance regression in its own hot code"
+            exit 2
+          fi
+          echo "    ✓ no self-bench regressions"

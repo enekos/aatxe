@@ -201,13 +201,17 @@ aatxe/
 │   ├── ts-example/         # smoke bench files for each adapter
 │   ├── go-example/
 │   ├── rust-example/
-│   └── council-bench/      # microbenches for the council pipeline
+│   ├── council-bench/      # microbenches for the council pipeline
+│   ├── core-bench/         # microbenches for the aatxe-core statistical brain
+│   ├── ast-bench/          # microbenches for aatxe-ast tree-sitter parsing
+│   └── big-diff-bench/     # large-diff parse-cost bench
 ├── evals/
 │   ├── council/cases/      # labeled diff fixtures + ground-truth JSON
 │   └── council/baselines/  # committed baselines the CI gate diffs against
 └── .github/workflows/
     ├── ci.yml                       # builds + tests the workspace (Rust + Go + TS)
     ├── aatxe.yml                    # reusable workflow for downstream services
+    ├── aatxe-self-bench.yml         # aatxe gates its own hot code with aatxe
     ├── aatxe-council.yml            # reusable council workflow
     ├── aatxe-council-selftest.yml   # council selftest (stub or real Kimi)
     └── aatxe-evals.yml              # eval harness — baseline-gated on every PR
@@ -495,14 +499,29 @@ jobs:
 
 ### Bench coverage
 
-The council's pure pipeline is benched with `aatxe-bench` itself —
-the same stats engine that judges aatxe's own perf regressions also
-judges the council's. See `examples/council-bench/`. The suite
-(`make council-bench`) covers diff parsing, path filtering, chunking,
-prompt assembly, JSON response parsing, deterministic synthesis, and the
-end-to-end `run_council` orchestration against a stub LLM. `make
-council-bench-self` proves the perf gate would catch a regression in the
-council itself by comparing the bench output against its own baseline.
+Aatxe benches its own hot code with `aatxe-bench` — the same stats engine
+that judges downstream consumers' perf also judges aatxe's. Four self-bench
+suites, each emitting a `RunReport` the comparator ingests:
+
+| Suite | Service tag | Covers | Run |
+| --- | --- | --- | --- |
+| `examples/council-bench/` | `aatxe-council` | diff parse · filter · chunk · prompt build · JSON parse · synth · stub `run_council` | `make council-bench` |
+| `examples/core-bench/` | `aatxe-core` | `summarize_samples` · Mann–Whitney U · MAD · Welch-t · `compare_reports` · affected import extractor | `make core-bench` |
+| `examples/ast-bench/` | `aatxe-ast` | tree-sitter `describe` (Rust/TS/Go) · `render_scope_block` | `make ast-bench` |
+| `examples/big-diff-bench/` | `aatxe-big-diff` | large-diff parse cost | — |
+
+`core-bench` and `ast-bench` target the most compute-intensive,
+network-free code in the project: the statistical brain that runs on
+*every* gate and the tree-sitter parser that dominates the council's
+pre-LLM cost. Workloads are frozen (deterministic PRNG / committed source
+snapshots) so the gate doesn't drift.
+
+Each suite has a `*-bench-self` target (`make core-bench-self`, etc.) that
+compares its output against itself to prove the render + gate path works,
+and the **`aatxe-self-bench.yml`** workflow runs all of them HEAD-vs-base on
+every PR and fails the lane on a regression — aatxe gating itself with
+aatxe. Locally, `aatxe perf-vs --bench core|ast|council|big-diff|all
+--against <ref>` does the same A/B across a sibling worktree.
 
 ### Environment
 

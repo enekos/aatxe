@@ -1,0 +1,14 @@
+[package]
+name = "aatxe-example-ast-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "aatxe-ast-bench"
+path = "src/main.rs"
+
+[dependencies]
+aatxe-bench = { path = "../../sdk/rust" }
+aatxe-ast = { path = "../../crates/aatxe-ast" }
+aatxe-core = { path = "../../crates/aatxe-core" }

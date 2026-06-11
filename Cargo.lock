@@ -83,12 +83,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "aatxe-example-ast-bench"
+version = "0.1.0"
+dependencies = [
+ "aatxe-ast",
+ "aatxe-bench",
+ "aatxe-core",
+]
+
+[[package]]
 name = "aatxe-example-big-diff-bench"
 version = "0.1.0"
 dependencies = [
  "aatxe-bench",
  "aatxe-core",
  "aatxe-council",
+]
+
+[[package]]
+name = "aatxe-example-core-bench"
+version = "0.1.0"
+dependencies = [
+ "aatxe-bench",
+ "aatxe-core",
 ]
 
 [[package]]
