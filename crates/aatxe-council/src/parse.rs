@@ -10,6 +10,17 @@ use crate::persona::Persona;
 use crate::types::{Finding, FindingCategory, JudgeVerdict, Severity};
 use serde::Deserialize;
 
+/// Confidence assigned to a candidate the judge failed to score — because
+/// it returned malformed JSON, an empty `verdicts` list, or simply omitted
+/// the candidate's index. Deliberately set just ABOVE the default
+/// confidence floor (0.55) so the documented "over-include rather than
+/// silently drop on judge failure" policy actually holds: a value below
+/// the floor (the old 0.5) hid these findings instead of shipping them,
+/// which is the opposite of over-including. A keep here is a soft keep —
+/// a working judge that genuinely doubts a finding will say so explicitly
+/// with a lower number.
+pub const JUDGE_FALLBACK_CONFIDENCE: f64 = 0.6;
+
 /// Parse a proposer response into a finding list. The persona is used as a
 /// safe default category (the model may omit it).
 pub fn parse_findings_json(raw: &str, persona: Persona) -> Vec<Finding> {
@@ -28,14 +39,14 @@ pub fn parse_findings_json(raw: &str, persona: Persona) -> Vec<Finding> {
 
 /// Parse the judge's response into per-candidate verdicts. Returns a vector
 /// matched against the input candidate list — for any candidate the judge
-/// failed to address, we synthesise a `keep` at confidence 0.5 (median)
+/// failed to address, we synthesise a `keep` at [`JUDGE_FALLBACK_CONFIDENCE`]
 /// so we never silently drop a finding because the judge forgot it.
 pub fn parse_judge_verdicts(
     raw: &str,
     candidate_count: usize,
 ) -> Vec<(JudgeVerdict, f64, Option<String>)> {
     let mut out: Vec<(JudgeVerdict, f64, Option<String>)> =
-        vec![(JudgeVerdict::Keep, 0.5, None); candidate_count];
+        vec![(JudgeVerdict::Keep, JUDGE_FALLBACK_CONFIDENCE, None); candidate_count];
     let Some(json) = extract_json_object(raw) else {
         return out;
     };
@@ -58,7 +69,10 @@ pub fn parse_judge_verdicts(
             "downgrade" | "lower" | "soften" => JudgeVerdict::Downgrade,
             _ => JudgeVerdict::Keep,
         };
-        let conf = v.confidence.unwrap_or(0.5).clamp(0.0, 1.0);
+        let conf = v
+            .confidence
+            .unwrap_or(JUDGE_FALLBACK_CONFIDENCE)
+            .clamp(0.0, 1.0);
         out[idx as usize] = (verdict, conf, v.note);
     }
     out
@@ -260,7 +274,7 @@ mod tests {
         assert_eq!(v[0].0, JudgeVerdict::Drop);
         assert!((v[0].1 - 0.9).abs() < 1e-9);
         assert_eq!(v[1].0, JudgeVerdict::Keep);
-        assert_eq!(v[1].1, 0.5);
+        assert_eq!(v[1].1, JUDGE_FALLBACK_CONFIDENCE);
         assert_eq!(v[2].0, JudgeVerdict::Downgrade);
         assert_eq!(v[2].2.as_deref(), Some("speculative"));
     }
@@ -272,7 +286,7 @@ mod tests {
         // All slots stayed at default
         for slot in v {
             assert_eq!(slot.0, JudgeVerdict::Keep);
-            assert_eq!(slot.1, 0.5);
+            assert_eq!(slot.1, JUDGE_FALLBACK_CONFIDENCE);
         }
     }
 }

@@ -364,7 +364,14 @@ fn run_judge(
     let (verdicts, err) = match client.chat(req) {
         Ok(resp) => (parse_judge_verdicts(&resp.content, candidates.len()), None),
         Err(e) => {
-            let fallback = vec![(JudgeVerdict::Keep, 0.5, None); candidates.len()];
+            let fallback = vec![
+                (
+                    JudgeVerdict::Keep,
+                    crate::parse::JUDGE_FALLBACK_CONFIDENCE,
+                    None
+                );
+                candidates.len()
+            ];
             (fallback, Some(format!("{e}")))
         }
     };
@@ -627,8 +634,8 @@ index 0..1 100644
         };
         // No judge stub is necessary because FlakyClient returns the same
         // payload regardless of role; the judge will receive the success
-        // blob and the parser will fall back to keep/0.5 because there's
-        // no `verdicts` field.
+        // blob and the parser will fall back to the keep/JUDGE_FALLBACK_
+        // CONFIDENCE default because there's no `verdicts` field.
         let report = run_council(
             DIFF,
             &CouncilOptions {
@@ -663,7 +670,7 @@ index 0..1 100644
     }
 
     #[test]
-    fn judge_failure_falls_back_to_keep_at_half_confidence() {
+    fn judge_failure_falls_back_to_keep_above_floor() {
         let proposer_blob = r#"{"findings":[{"file":"src/x.rs","line":1,"severity":"major","title":"foo","rationale":"r"}]}"#;
         // Client that answers proposers fine but fails on the judge call.
         struct OnlyJudgeFails(String);
@@ -713,13 +720,13 @@ index 0..1 100644
         );
         assert!(
             !report.judged.is_empty(),
-            "candidates ship at default keep/0.5"
+            "candidates ship at the judge fallback confidence"
         );
         for jf in &report.judged {
             assert_eq!(jf.verdict, JudgeVerdict::Keep);
-            assert!((jf.confidence - 0.5).abs() < 1e-9);
+            assert!((jf.confidence - crate::parse::JUDGE_FALLBACK_CONFIDENCE).abs() < 1e-9);
         }
-        // Default fallback confidence 0.5 ≥ floor 0.4 → finding ships.
+        // Fallback confidence (≈0.6) ≥ floor 0.4 → finding ships.
         assert!(!report.shippable().is_empty());
     }
 
