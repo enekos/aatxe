@@ -1,6 +1,6 @@
 {
   "name": "@aatxe/bench",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Authoring API + runner that emits aatxe-compatible RunReport JSON for TS/JS benches",
   "license": "MIT",
   "type": "module",

@@ -15,6 +15,7 @@
 use crate::claude_code::{ClaudeCodeClient, ClaudeCodeConfig};
 use crate::cli::{BackendArg, CouncilArgs};
 use crate::commands::Outcome;
+use crate::gemini_http::{self, GeminiClient, GeminiConfig};
 use crate::gh_diff::fetch_pr_diff;
 use crate::github_http::UreqClient;
 use crate::pi_proxy::{PiAgentClient, PiConfig};
@@ -56,6 +57,10 @@ pub fn execute(args: CouncilArgs) -> Result<Outcome> {
                         .unwrap_or_else(|| "claude-code".to_string())
                 })
             }
+            BackendArg::Gemini => args
+                .model
+                .clone()
+                .unwrap_or_else(|| format!("gemini+{}", gemini_http::model_from_env())),
         }
     };
 
@@ -130,6 +135,18 @@ pub fn execute(args: CouncilArgs) -> Result<Outcome> {
                         .unwrap_or_default(),
                 );
                 Box::new(ClaudeCodeClient::new(cc_cfg))
+            }
+            BackendArg::Gemini => {
+                let mut gem_cfg =
+                    GeminiConfig::from_env().map_err(|e| anyhow!("--backend gemini: {e}"))?;
+                if let Some(m) = args.model.clone() {
+                    gem_cfg.model = m;
+                }
+                eprintln!(
+                    "aatxe council: gemini ({}), direct HTTP — no repo tools",
+                    gem_cfg.model,
+                );
+                Box::new(GeminiClient::new(gem_cfg))
             }
         }
     };

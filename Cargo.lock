@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "aatxe"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aatxe-ast",
  "aatxe-core",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "aatxe-ast"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aatxe-core",
  "once_cell",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "aatxe-bench"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aatxe-core",
  "serde",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "aatxe-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "once_cell",
  "regex",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "aatxe-council"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aatxe-core",
  "anyhow",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "aatxe-evals"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aatxe-core",
  "aatxe-council",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "aatxe-learn"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aatxe-council",
  "anyhow",
