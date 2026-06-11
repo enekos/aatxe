@@ -253,6 +253,30 @@ perf-vs-self: $(TMP) build-rust ## Smoke test: perf-vs against HEAD~1 (or origin
 	       --out-dir $(TMP)/perf-vs/self
 	@echo "    ✓ perf-vs-self: see $(TMP)/perf-vs/self/cmp.md"
 
+# ----------------------------------------------------------------------------
+# Local realtime dashboard
+# ----------------------------------------------------------------------------
+#
+# `aatxe ui` serves the embedded dashboard: spawn coding agents in
+# isolated worktrees, re-bench on every working-tree change, stream
+# trajectories + council verdicts + tournament standings to the browser.
+#
+# Knobs (all optional):
+#   UI_PORT   — port to bind. Default 4866.
+#   UI_FLAGS  — extra flags, e.g. `--stub-agent --council stub --no-open`.
+
+UI_PORT ?= 4866
+
+.PHONY: ui
+ui: build-rust ## Launch the local realtime dashboard on $(UI_PORT). Knobs: UI_PORT, UI_FLAGS.
+	$(call say,ui)
+	$(AATXE_BIN) ui --port $(UI_PORT) $(UI_FLAGS)
+
+.PHONY: ui-demo
+ui-demo: build-rust ## Dashboard demo: offline stub agent + stub council, no LLM spend. Spawn an agent from the browser to watch the full loop.
+	$(call say,ui-demo)
+	$(AATXE_BIN) ui --port $(UI_PORT) --stub-agent --council stub
+
 .PHONY: council-dry-run
 council-dry-run: $(TMP) build-rust ## Pipe the bundled council fixture diff through `aatxe council`. Requires KIMI_API_KEY.
 	$(call say,council-dry-run)

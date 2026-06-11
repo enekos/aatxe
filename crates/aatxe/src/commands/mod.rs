@@ -14,6 +14,8 @@ pub mod list;
 pub mod perf_vs;
 pub mod report;
 pub mod run;
+#[cfg(feature = "ui")]
+pub mod ui;
 
 use crate::cli::{Cli, Command};
 
@@ -39,5 +41,7 @@ pub fn run(cli: Cli) -> Result<Outcome> {
         Command::Learn(a) => learn::execute(a),
         Command::PerfVs(a) => perf_vs::execute(a),
         Command::Baseline(a) => baseline::execute(a),
+        #[cfg(feature = "ui")]
+        Command::Ui(a) => ui::execute(a).map(|_| Outcome::Ok),
     }
 }

@@ -11,8 +11,15 @@ description = "Statistical microbenchmark + regression-gate CLI for TypeScript, 
 name = "aatxe"
 path = "src/main.rs"
 
+[features]
+# `ui` ships the local realtime dashboard (`aatxe ui`). Default-on so
+# `cargo install aatxe` gets it; `--no-default-features` for a slim CLI.
+default = ["ui"]
+ui = ["dep:aatxe-ui"]
+
 [dependencies]
 aatxe-core = { path = "../aatxe-core" }
+aatxe-ui = { path = "../aatxe-ui", optional = true }
 aatxe-ast = { path = "../aatxe-ast" }
 aatxe-council = { path = "../aatxe-council" }
 aatxe-evals = { path = "../aatxe-evals" }
