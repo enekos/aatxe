@@ -49,6 +49,11 @@ pub enum Command {
     /// commit → push → wait-on-GH-Actions loop with a ~30 s local one.
     #[command(name = "perf-vs")]
     PerfVs(PerfVsArgs),
+    /// Manage locally-saved baseline RunReports. `aatxe baseline save`
+    /// snapshots a report under `.aatxe/baselines/`; `aatxe compare
+    /// --against-local` then uses it as the base side — a trial-locally
+    /// loop that needs no CI artifacts.
+    Baseline(BaselineArgs),
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
@@ -165,8 +170,25 @@ pub struct RunArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CompareArgs {
+    /// Base-side RunReport JSON. Mutually exclusive with `--against-local`.
+    #[arg(
+        long,
+        required_unless_present = "against_local",
+        conflicts_with = "against_local"
+    )]
+    pub base: Option<PathBuf>,
+    /// Use the locally-saved baseline (see `aatxe baseline save`) as the
+    /// base side instead of `--base`.
     #[arg(long)]
-    pub base: PathBuf,
+    pub against_local: bool,
+    /// Which named local baseline to compare against. Only meaningful with
+    /// `--against-local`.
+    #[arg(long, default_value = "default")]
+    pub baseline_name: String,
+    /// Override the baseline directory. Default `<repo-root>/.aatxe/baselines`
+    /// (falls back to the current directory outside a git repo).
+    #[arg(long)]
+    pub baseline_dir: Option<PathBuf>,
     #[arg(long)]
     pub head: PathBuf,
     /// JSON output path for the CompareReport. Default `./aatxe-report.json`.
@@ -520,4 +542,79 @@ pub struct LearnShowArgs {
     /// Render as JSON instead of the human-readable table.
     #[arg(long)]
     pub json: bool,
+}
+
+/// `aatxe baseline` — snapshot RunReports locally so `aatxe compare
+/// --against-local` works without CI artifacts.
+///
+/// The intended loop on a consumer repo:
+///
+/// ```text
+/// aatxe run --lang ts                 # bench current code → ./aatxe.json
+/// aatxe baseline save                 # snapshot it as the local baseline
+/// <edit code>
+/// aatxe run --lang ts
+/// aatxe compare --against-local --head aatxe.json
+/// ```
+///
+/// Baselines live under `<repo-root>/.aatxe/baselines/<name>.json`. The
+/// `.aatxe/` directory is self-gitignoring (a `.gitignore` containing `*`
+/// is written on first save) — local baselines are per-machine state and
+/// never belong in the repo.
+#[derive(clap::Args, Debug)]
+pub struct BaselineArgs {
+    #[command(subcommand)]
+    pub command: BaselineCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BaselineCommand {
+    /// Validate a RunReport JSON and snapshot it as a named local baseline.
+    Save(BaselineSaveArgs),
+    /// Print a summary of a saved baseline (service, ref, per-bench medians).
+    Show(BaselineShowArgs),
+    /// List every saved baseline with its ref and bench count.
+    List(BaselineListArgs),
+    /// Delete a saved baseline.
+    Rm(BaselineRmArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BaselineSaveArgs {
+    /// RunReport JSON to snapshot (as produced by `aatxe run`).
+    #[arg(long, default_value = "./aatxe.json")]
+    pub report: PathBuf,
+    /// Baseline name. Use distinct names to keep several baselines around
+    /// (e.g. one per branch or per experiment).
+    #[arg(long, default_value = "default")]
+    pub name: String,
+    /// Override the baseline directory. Default `<repo-root>/.aatxe/baselines`
+    /// (falls back to the current directory outside a git repo).
+    #[arg(long)]
+    pub dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BaselineShowArgs {
+    #[arg(long, default_value = "default")]
+    pub name: String,
+    #[arg(long)]
+    pub dir: Option<PathBuf>,
+    /// Print the raw RunReport JSON instead of the summary.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BaselineListArgs {
+    #[arg(long)]
+    pub dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct BaselineRmArgs {
+    #[arg(long)]
+    pub name: String,
+    #[arg(long)]
+    pub dir: Option<PathBuf>,
 }

@@ -4,6 +4,7 @@
 use anyhow::Result;
 
 pub mod affected;
+pub mod baseline;
 pub mod comment;
 pub mod compare;
 pub mod council;
@@ -37,5 +38,6 @@ pub fn run(cli: Cli) -> Result<Outcome> {
         Command::Evals(a) => evals::execute(a),
         Command::Learn(a) => learn::execute(a),
         Command::PerfVs(a) => perf_vs::execute(a),
+        Command::Baseline(a) => baseline::execute(a),
     }
 }

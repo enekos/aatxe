@@ -77,12 +77,28 @@ function getState(): HarnessState {
  * Call at module top level inside a `*.bench.ts` file. Names must be unique
  * inside a single run. The harness sees the registration when the runner
  * loads the file; the actual measurement happens later, in the runner.
+ *
+ * With `options.params` set, one bench per param is registered under
+ * `name/String(param)`; the param arrives as the fn's second argument and
+ * as `setup`'s first:
+ *
+ * ```ts
+ * bench('parse', (_, n) => { keep(parse(inputs[n])) }, { params: [10, 1e3, 1e5] })
+ * ```
  */
-export function bench<T = void>(
+export function bench<T = void, P = unknown>(
   name: string,
-  fn: BenchFn<T>,
-  options: BenchOptions<T> = {},
+  fn: BenchFn<T, P>,
+  options: BenchOptions<T, P> = {},
 ): void {
+  if (options.params !== undefined) {
+    registerParams(name, fn, options)
+    return
+  }
+  register(name, fn as BenchFn<unknown>, resolveOptions(options))
+}
+
+function register(name: string, fn: BenchFn<unknown>, options: ResolvedBenchOptions): void {
   const state = getState()
   if (state.registry.some(b => b.name === name)) {
     throw new Error(`aatxe: duplicate bench name "${name}"`)
@@ -90,12 +106,57 @@ export function bench<T = void>(
   state.registry.push({
     name,
     file: state.currentFile ?? '<unknown>',
-    options: resolveOptions(options),
-    fn: fn as BenchFn<unknown>,
+    options,
+    fn,
   })
 }
 
-function resolveOptions<T>(opts: BenchOptions<T>): ResolvedBenchOptions {
+function registerParams<T, P>(
+  name: string,
+  fn: BenchFn<T, P>,
+  options: BenchOptions<T, P>,
+): void {
+  const { params, setup, ...rest } = options
+  if (params!.length === 0) {
+    throw new Error(`aatxe: bench "${name}" declares an empty params array`)
+  }
+  const labels = params!.map(p => String(p))
+  const firstDup = labels.find((l, i) => labels.indexOf(l) !== i)
+  if (firstDup !== undefined) {
+    throw new Error(
+      `aatxe: bench "${name}" params stringify to duplicate label "${firstDup}" — ` +
+      `use param values with unique String() forms`,
+    )
+  }
+  params!.forEach((param, i) => {
+    const perParam: BenchOptions<T, P> = {
+      ...rest,
+      ...(setup ? { setup: () => setup(param) } : {}),
+    }
+    register(
+      `${name}/${labels[i]}`,
+      bindParam(fn, param) as BenchFn<unknown>,
+      resolveOptions(perParam),
+    )
+  })
+}
+
+/**
+ * Close the bench fn over one param. The wrapper mirrors the original's
+ * declared asyncness because the runner picks the sync hot loop vs the
+ * awaiting loop by checking `constructor.name === 'AsyncFunction'` — a
+ * plain arrow wrapping an async fn would silently stop being awaited.
+ */
+function bindParam<T, P>(fn: BenchFn<T, P>, param: P): BenchFn<T, P> {
+  const declaredAsync =
+    (fn as { constructor?: { name?: string } }).constructor?.name === 'AsyncFunction'
+  if (declaredAsync) {
+    return async (fixture: T) => { await fn(fixture, param) }
+  }
+  return (fixture: T) => fn(fixture, param)
+}
+
+function resolveOptions<T, P>(opts: BenchOptions<T, P>): ResolvedBenchOptions {
   const resolved: ResolvedBenchOptions = {
     ...DEFAULTS,
     ...(opts.warmup != null ? { warmup: opts.warmup } : {}),

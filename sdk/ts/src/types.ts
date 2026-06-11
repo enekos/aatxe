@@ -3,8 +3,13 @@
  * `RunReport` exactly so the Rust CLI can deserialise without translation.
  */
 
-export interface BenchOptions<T = void> {
-  setup?: () => T | Promise<T>
+export interface BenchOptions<T = void, P = unknown> {
+  /**
+   * Build the per-call fixture. With `params` set, receives the current
+   * param so sized inputs can be generated per variant; without `params`
+   * the argument is `undefined` and zero-arg setups keep working unchanged.
+   */
+  setup?: (param: P) => T | Promise<T>
   teardown?: (fixture: T) => void | Promise<void>
   warmup?: number
   minIterations?: number
@@ -22,6 +27,16 @@ export interface BenchOptions<T = void> {
    * locally iterating on a single flaky bench without commenting out the rest.
    */
   only?: boolean
+  /**
+   * Parameterize the bench: one registration (and one `BenchRun`) per
+   * entry, named `name/String(param)`. The param flows into the bench fn
+   * as its second argument and into `setup` as its first. Params must
+   * stringify uniquely — `[10, 1e3, 1e5]` works, two distinct objects
+   * (both `[object Object]`) don't. A regression that appears only at
+   * large sizes then shows up as `parse/100000` regressing while
+   * `parse/10` holds — a complexity change, not a constant-factor one.
+   */
+  params?: readonly P[]
 }
 
 export interface ResolvedBenchOptions {
@@ -39,7 +54,7 @@ export interface ResolvedBenchOptions {
   teardown: ((fixture: unknown) => void | Promise<void>) | null
 }
 
-export type BenchFn<T = void> = (fixture: T) => void | Promise<void>
+export type BenchFn<T = void, P = unknown> = (fixture: T, param: P) => void | Promise<void>
 
 export interface RegisteredBench {
   name: string

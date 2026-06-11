@@ -241,3 +241,86 @@ func contains(haystack, needle string) bool {
 
 // Compile-time check: os.Stdout is fine; we don't shadow it.
 var _ = os.Stdout
+
+func fastOpts() Options {
+	return Options{
+		Warmup:        0,
+		MinIterations: 2,
+		MaxIterations: 2,
+		TimeBudget:    time.Second,
+		TargetCV:      0,
+		File:          "fixture.go",
+	}
+}
+
+func TestBenchParamExpandsOneRunPerParam(t *testing.T) {
+	s := NewSuite("svc")
+	BenchParamWith(s, "parse", fastOpts(), []int{10, 1000, 100000}, func(n int) {
+		Keep(n * 2)
+	})
+	r := s.IntoReport()
+	want := []string{"parse/10", "parse/1000", "parse/100000"}
+	if len(r.Runs) != len(want) {
+		t.Fatalf("expected %d runs, got %d", len(want), len(r.Runs))
+	}
+	for i, w := range want {
+		if r.Runs[i].Name != w {
+			t.Fatalf("run %d: expected name %q, got %q", i, w, r.Runs[i].Name)
+		}
+	}
+}
+
+func TestBenchParamPassesEachValueToFn(t *testing.T) {
+	s := NewSuite("svc")
+	seen := map[int]bool{}
+	BenchParamWith(s, "sized", fastOpts(), []int{1, 2, 3}, func(n int) {
+		seen[n] = true
+	})
+	for _, n := range []int{1, 2, 3} {
+		if !seen[n] {
+			t.Fatalf("fn never received param %d", n)
+		}
+	}
+}
+
+func TestBenchParamSupportsStringParams(t *testing.T) {
+	s := NewSuite("svc")
+	BenchParamWith(s, "codec", fastOpts(), []string{"json", "proto"}, func(c string) {
+		Keep(len(c))
+	})
+	r := s.IntoReport()
+	if r.Runs[0].Name != "codec/json" || r.Runs[1].Name != "codec/proto" {
+		t.Fatalf("unexpected names: %q, %q", r.Runs[0].Name, r.Runs[1].Name)
+	}
+}
+
+func TestBenchParamDerivesFileFromCaller(t *testing.T) {
+	s := NewSuite("svc")
+	BenchParam(s, "from-caller", []int{1}, func(n int) { Keep(n) })
+	r := s.IntoReport()
+	if !strings.Contains(r.Runs[0].File, "aatxe_test.go") {
+		t.Fatalf("expected caller-derived file, got %q", r.Runs[0].File)
+	}
+}
+
+func TestBenchParamPanicsOnEmptyParams(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic on empty params")
+		}
+	}()
+	s := NewSuite("svc")
+	BenchParamWith(s, "none", fastOpts(), []int{}, func(int) {})
+}
+
+func TestBenchParamPanicsOnDuplicateLabels(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic on duplicate labels")
+		}
+	}()
+	s := NewSuite("svc")
+	type opaque struct{ a, b int }
+	// Two distinct structs with identical fmt.Sprint forms.
+	BenchParamWith(s, "dup", fastOpts(), []opaque{{1, 2}, {1, 2}}, func(opaque) {})
+}

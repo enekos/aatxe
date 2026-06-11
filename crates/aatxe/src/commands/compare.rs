@@ -13,8 +13,24 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn execute(args: CompareArgs) -> Result<Outcome> {
-    let base: RunReport = read_report(&args.base)
-        .with_context(|| format!("reading base report from {}", args.base.display()))?;
+    // clap guarantees exactly one of --base / --against-local is present.
+    let base_path = match args.base.as_ref() {
+        Some(p) => p.clone(),
+        None => {
+            let p = crate::commands::baseline::resolve_for_compare(
+                args.baseline_dir.as_deref(),
+                &args.baseline_name,
+            )?;
+            eprintln!(
+                "aatxe compare: base = local baseline '{}' ({})",
+                args.baseline_name,
+                p.display()
+            );
+            p
+        }
+    };
+    let base: RunReport = read_report(&base_path)
+        .with_context(|| format!("reading base report from {}", base_path.display()))?;
     let head: RunReport = read_report(&args.head)
         .with_context(|| format!("reading head report from {}", args.head.display()))?;
 

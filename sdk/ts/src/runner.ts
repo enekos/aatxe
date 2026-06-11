@@ -140,7 +140,7 @@ async function runAsync(
     let fixture: unknown = undefined
     if (setup) fixture = await setup()
     try {
-      const ret = fn(fixture)
+      const ret = fn(fixture, undefined)
       if (ret instanceof Promise) await ret
     } finally {
       if (teardown) await teardown(fixture)

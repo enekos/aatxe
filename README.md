@@ -134,6 +134,29 @@ fn main() {
 }
 ```
 
+All three SDKs also support **parameterized benches** — one `BenchRun` per
+param, named `name/param`, so a regression that only appears at large
+inputs reads as a complexity change rather than a constant-factor one:
+
+```ts
+// TS — param arrives as the fn's 2nd argument and as setup's 1st:
+bench('parse', (_, n) => { keep(parse(inputs[n])) }, { params: [10, 1e3, 1e5] })
+```
+
+```go
+// Go:
+aatxe.BenchParam(s, "parse", []int{10, 1_000, 100_000}, func(n int) {
+    aatxe.Keep(Parse(inputs[n]))
+})
+```
+
+```rust
+// Rust:
+bench_param(&mut suite, "parse", &[10, 1_000, 100_000], |n| {
+    keep(parse(&inputs[n]));
+});
+```
+
 ### 2. Run them locally
 
 ```bash
@@ -141,6 +164,23 @@ aatxe run --lang ts   --out /tmp/head.json
 aatxe run --lang go   --out /tmp/head.json
 aatxe run --lang rust --out /tmp/head.json
 ```
+
+### 2½. Trial the gate locally — no CI wiring needed
+
+`aatxe baseline save` snapshots a report under `.aatxe/baselines/`
+(self-gitignoring), and `aatxe compare --against-local` uses it as the
+base side:
+
+```bash
+aatxe run --lang ts --out aatxe.json
+aatxe baseline save                 # snapshot ./aatxe.json as 'default'
+# …edit code…
+aatxe run --lang ts --out aatxe.json
+aatxe compare --against-local --head aatxe.json --fail-on-regression
+```
+
+`--name <n>` keeps several baselines around (one per branch or
+experiment); `aatxe baseline list` / `show` / `rm` manage them.
 
 ### 3. Compare and post the sticky comment
 
@@ -218,8 +258,10 @@ aatxe/
 ```
 aatxe run       --lang <ts|go|rust> [--out <file>] [--service <name>] [--ref <ref>]
                 [--filter <regex>] [--affected --base <ref>] [pattern...]
-aatxe compare   --base <a.json> --head <b.json> [--out <cmp.json>] [--markdown <md>]
+aatxe compare   (--base <a.json> | --against-local [--baseline-name <n>]) --head <b.json>
+                [--out <cmp.json>] [--markdown <md>]
                 [--threshold 0.05] [--alpha 0.05] [--noisy-cv 0.25] [--fail-on-regression]
+aatxe baseline  save [--report <json>] [--name <n>] | show | list | rm --name <n>
 aatxe report    --diff <cmp.json> [--out <md>]
 aatxe comment   --report <md> [--repo owner/name] [--pr <num>] [--token <token>]
 aatxe affected  --lang <ts|go|rust> --base <ref> [--show-all] [pattern...]

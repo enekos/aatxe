@@ -6,7 +6,7 @@
 //! The runner emits a single RunReport JSON on stdout — everything else
 //! goes to stderr so it doesn't pollute the payload.
 
-use aatxe_bench::{bench, keep, Suite};
+use aatxe_bench::{bench, bench_param, keep, Suite};
 
 fn main() {
     let mut suite = Suite::new("example-rust");
@@ -20,6 +20,12 @@ fn main() {
     bench(&mut suite, "vec_alloc", || {
         let v: Vec<u64> = (0..32).collect();
         keep(v);
+    });
+
+    // Parameterized: one BenchRun per size (`vec_sum/8` etc.). A complexity
+    // regression shows up only at the larger params.
+    bench_param(&mut suite, "vec_sum", &[8u64, 256], |n| {
+        keep((0..*n).sum::<u64>());
     });
 
     suite.emit_stdout();
