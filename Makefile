@@ -381,6 +381,20 @@ evals-real: $(TMP) build-rust ## Run the eval harness using the real Kimi backen
 	    --markdown $(TMP)/aatxe-evals-real.md
 	@echo "    ✓ evals-real: wrote $(TMP)/aatxe-evals-real.{json,md}"
 
+.PHONY: evals-real-gemini
+evals-real-gemini: $(TMP) build-rust ## Run the eval harness using the real Gemini backend (direct HTTP, no gate). Requires GEMINI_API_KEY.
+	$(call say,evals-real-gemini)
+	@if [ -z "$$GEMINI_API_KEY" ]; then \
+	    echo "    ✗ GEMINI_API_KEY is unset. Export it and rerun (model via GEMINI_MODEL, default gemini-2.5-flash)."; \
+	    exit 1; \
+	fi
+	$(AATXE_BIN) evals \
+	    --council-real-llm \
+	    --backend gemini \
+	    --out $(TMP)/aatxe-evals-real-gemini.json \
+	    --markdown $(TMP)/aatxe-evals-real-gemini.md
+	@echo "    ✓ evals-real-gemini: wrote $(TMP)/aatxe-evals-real-gemini.{json,md}"
+
 .PHONY: evals-update-baseline
 evals-update-baseline: evals-no-gate ## Replace the committed stub baseline with the current run. Use only when corpus or pipeline changes are deliberate.
 	$(call say,evals-update-baseline)

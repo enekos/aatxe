@@ -14,6 +14,7 @@
 use crate::claude_code::{ClaudeCodeClient, ClaudeCodeConfig};
 use crate::cli::{BackendArg, EvalsArgs};
 use crate::commands::Outcome;
+use crate::gemini_http::{self, GeminiClient, GeminiConfig};
 use crate::pi_proxy::{PiAgentClient, PiConfig};
 use crate::stub_client::StubKimi;
 use aatxe_council::llm::LlmClient;
@@ -82,6 +83,15 @@ pub fn execute(args: EvalsArgs) -> Result<Outcome> {
                 BackendArg::ClaudeCode => {
                     Box::new(ClaudeCodeClient::new(ClaudeCodeConfig::from_env()))
                 }
+                BackendArg::Gemini => {
+                    let cfg = GeminiConfig::from_env().map_err(|e| {
+                        anyhow!(
+                            "--council-real-llm --backend gemini: {e} \
+                             (drop the flag for a stub-LLM smoke test)"
+                        )
+                    })?;
+                    Box::new(GeminiClient::new(cfg))
+                }
             }
         } else {
             Box::new(StubKimi)
@@ -125,6 +135,9 @@ pub fn execute(args: EvalsArgs) -> Result<Outcome> {
                                 .clone()
                                 .map(|m| format!("claude-code+{m}"))
                                 .unwrap_or_else(|| "claude-code".to_string())
+                        }
+                        BackendArg::Gemini => {
+                            format!("gemini+{}", gemini_http::model_from_env())
                         }
                     }
                 } else {

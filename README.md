@@ -321,19 +321,28 @@ aatxe council --pr 42 \
 
 ### Backends
 
-The council shells out to a local agent CLI per LLM call; the agent
-does the model + tool-use loop and writes the final assistant message
-to stdout. Two backends are wired today, selectable with `--backend`:
+Three backends are wired today, selectable with `--backend`:
 
-| `--backend`      | binary it shells out to | auth                                  | endpoint                |
-|------------------|-------------------------|---------------------------------------|-------------------------|
-| `pi-proxy` (default) | `pi` (One Ping agent CLI)        | `KIMI_API_KEY` env var               | Moonshot `kimi-coding`  |
-| `claude-code`    | `claude` (Claude Code CLI)       | your Claude Code subscription/auth   | Anthropic               |
+| `--backend`      | transport               | auth                                  | endpoint                | repo tools |
+|------------------|-------------------------|---------------------------------------|-------------------------|------------|
+| `pi-proxy` (default) | shells out to `pi` (One Ping agent CLI) | `KIMI_API_KEY` env var | Moonshot `kimi-coding`  | yes (read-only) |
+| `claude-code`    | shells out to `claude` (Claude Code CLI) | your Claude Code subscription/auth | Anthropic | yes (read-only) |
+| `gemini`         | **direct HTTP** (`ureq`) | `GEMINI_API_KEY` env var | Gemini OpenAI-compat API | no |
 
-Both backends pass a **read-only** tool allowlist (`Read`/`Grep`/`Glob`
-or equivalent) to the underlying agent. The allowlist is hardcoded in
+`pi-proxy` and `claude-code` shell out to a local **agent** CLI per LLM
+call: the agent runs the model + tool-use loop and can `Read`/`Grep`/`Glob`
+the repo under review. The allowlist is hardcoded in
 `pi_proxy.rs`/`claude_code.rs` and cannot be widened from outside —
 council can never run `Bash`, `Edit`, or `Write`.
+
+`gemini` is different: there is no Gemini agent CLI, so this backend is a
+direct blocking HTTP client against Gemini's OpenAI-compatible
+chat-completions endpoint. It has **no repo tool access** — it sees only
+the pre-packed prompt the pipeline builds (diff + AST scope +
+related-file context). That makes it the cheapest backend to operate
+(one API key, no local CLI install) and the "pre-packed context, no
+tools" arm of the backend experiment. Transient failures (`408`/`425`/
+`429`/`5xx` + transport errors) are retried with exponential backoff.
 
 Backend-specific environment knobs:
 
@@ -345,6 +354,10 @@ PI_BIN=/custom/path/to/pi PI_MODEL=kimi-k2-thinking aatxe council --pr 42
 CLAUDE_BIN=/custom/path/to/claude CLAUDE_MODEL=opus \
     CLAUDE_MAX_BUDGET_USD=2.0 \
     aatxe council --pr 42 --backend claude-code
+
+# gemini (direct API; model via GEMINI_MODEL or --model, default gemini-2.5-flash)
+GEMINI_API_KEY=... GEMINI_MODEL=gemini-2.5-pro \
+    aatxe council --pr 42 --backend gemini
 ```
 
 ### Streaming pipeline events
