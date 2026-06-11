@@ -59,6 +59,13 @@ pub enum PerfBenchArg {
     Council,
     /// `examples/big-diff-bench` — large-diff parse cost. ~30 s.
     BigDiff,
+    /// `examples/core-bench` — the `aatxe-core` statistical brain:
+    /// summarize_samples, Mann-Whitney U, MAD, Welch-t, compare_reports,
+    /// and the affected-set import extractor. ~5 s.
+    Core,
+    /// `examples/ast-bench` — `aatxe-ast` tree-sitter parse + scope-render
+    /// cost across Rust/TS/Go fixtures. ~5 s.
+    Ast,
     /// Run every supported bench and concatenate the results into one
     /// `RunReport` per side before comparing.
     All,
