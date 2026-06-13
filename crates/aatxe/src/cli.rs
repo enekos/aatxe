@@ -54,6 +54,12 @@ pub enum Command {
     /// --against-local` then uses it as the base side — a trial-locally
     /// loop that needs no CI artifacts.
     Baseline(BaselineArgs),
+    /// Launch the local realtime dashboard: spawn coding agents in
+    /// isolated worktrees, re-bench every working-tree change, and watch
+    /// head-vs-base trajectories (plus council reviews and tournament
+    /// standings) stream live into the browser.
+    #[cfg(feature = "ui")]
+    Ui(UiArgs),
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
@@ -632,4 +638,98 @@ pub struct BaselineRmArgs {
     pub name: String,
     #[arg(long)]
     pub dir: Option<PathBuf>,
+}
+
+/// `aatxe ui` — local realtime dashboard.
+///
+/// Serves an embedded single-page frontend on localhost. Three layers,
+/// each usable without the next: (1) a live `RunReport`/`CompareReport`
+/// sink (`POST /api/runs`, plus a watcher on `tmp/perf-vs/` and
+/// `.aatxe/baselines/`); (2) coding agents spawned into isolated
+/// worktrees whose benches re-run on every working-tree change; (3) a
+/// council lane + tournaments ranking K agents on the same task.
+#[cfg(feature = "ui")]
+#[derive(clap::Args, Debug)]
+pub struct UiArgs {
+    /// Port to bind on 127.0.0.1.
+    #[arg(long, default_value_t = 4866)]
+    pub port: u16,
+    /// Repository the dashboard operates on. Defaults to the enclosing
+    /// repo of the current directory.
+    #[arg(long)]
+    pub repo: Option<PathBuf>,
+    /// Ref agents branch from and bench-compare against.
+    #[arg(long, default_value = "HEAD")]
+    pub base: String,
+    /// Which of aatxe's own benches to run per iteration. Ignored when
+    /// `--bench-cmd` is set.
+    #[arg(long, value_enum, default_value_t = PerfBenchArg::Council)]
+    pub bench: PerfBenchArg,
+    /// Arbitrary shell command whose stdout ends with a RunReport JSON.
+    /// This is what makes the dashboard work in any repo with an aatxe
+    /// SDK: e.g. `--bench-cmd "npx aatxe-ts-runner …"`.
+    #[arg(long)]
+    pub bench_cmd: Option<String>,
+    /// Parent directory for agent + base worktrees. Default
+    /// `<repo>/../aatxe-worktrees` (same convention as `perf-vs`).
+    #[arg(long)]
+    pub worktree_dir: Option<PathBuf>,
+    /// Seconds between dirty-checks of each agent worktree.
+    #[arg(long, default_value_t = 15)]
+    pub poll_secs: u64,
+    /// Which backend drives spawned coding agents.
+    #[arg(long, value_enum, default_value_t = UiAgentArg::Claude)]
+    pub agent_backend: UiAgentArg,
+    /// Model for the gemini backend (default `gemini-2.5-flash`).
+    #[arg(long, env = "GEMINI_MODEL")]
+    pub gemini_model: Option<String>,
+    /// Council lane mode for finished agents.
+    #[arg(long, value_enum, default_value_t = UiCouncilArg::Stub)]
+    pub council: UiCouncilArg,
+    /// Path or executable name of the `claude` binary for agent runs.
+    #[arg(long, env = "CLAUDE_BIN")]
+    pub claude_binary: Option<PathBuf>,
+    /// Model alias passed to the agent (`--model sonnet`, `opus`, …).
+    #[arg(long, env = "CLAUDE_MODEL")]
+    pub model: Option<String>,
+    /// Don't auto-open the browser.
+    #[arg(long)]
+    pub no_open: bool,
+    /// Maximum concurrently-running agents.
+    #[arg(long, default_value_t = 6)]
+    pub max_agents: usize,
+    /// Median-delta threshold for "meaningful" change (default 0.05 = 5%).
+    #[arg(long, default_value_t = 0.05)]
+    pub threshold: f64,
+    /// p-value cutoff for the Mann–Whitney U test (default 0.05).
+    #[arg(long, default_value_t = 0.05)]
+    pub alpha: f64,
+    /// CV cutoff above which the noise gate engages (default 0.25 = 25%).
+    #[arg(long, default_value_t = 0.25)]
+    pub noisy_cv: f64,
+    /// Confidence floor forwarded to council runs.
+    #[arg(long, default_value_t = 0.55)]
+    pub confidence_floor: f64,
+}
+
+#[cfg(feature = "ui")]
+#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum UiAgentArg {
+    /// Shell out to the local `claude` CLI in print mode (subscription auth).
+    Claude,
+    /// Native tool-use loop over the Gemini API. Requires `GEMINI_API_KEY`.
+    Gemini,
+    /// Deterministic offline scripted runner — demos and harness checks.
+    Stub,
+}
+
+#[cfg(feature = "ui")]
+#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum UiCouncilArg {
+    /// No council lane.
+    Off,
+    /// `AATXE_COUNCIL_STUB=1` — free, offline, proves plumbing.
+    Stub,
+    /// Real review via the `claude-code` backend (subscription auth).
+    Real,
 }

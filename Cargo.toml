@@ -7,6 +7,7 @@ members = [
     "crates/aatxe-council",
     "crates/aatxe-evals",
     "crates/aatxe-learn",
+    "crates/aatxe-ui",
     "sdk/rust",
     "examples/rust-example",
     "examples/council-bench",

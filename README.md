@@ -273,6 +273,8 @@ aatxe list      --lang <ts|go|rust> [pattern...]
 aatxe council   [--pr <num>] [--diff-file <path>] [--model kimi-k2.6]
                 [--confidence-floor 0.55] [--ignore <pat>...] [--out <json>]
                 [--markdown <md>] [--post] [--fail-on-critical]
+aatxe ui        [--port 4866] [--base HEAD] [--bench council] [--bench-cmd <cmd>]
+                [--agent-backend claude|gemini|stub] [--council off|stub|real] [--no-open]
 ```
 
 Exit codes: `0` success, `1` runtime error, `2` regressions detected (when
@@ -575,6 +577,51 @@ aatxe. Locally, `aatxe perf-vs --bench core|ast|council|big-diff|all
 | `GITHUB_TOKEN` / `GH_TOKEN` | yes | — | PAT or Actions token with `pull-requests: write`. |
 | `GITHUB_REPOSITORY` | yes | — | `owner/name` for the PR. |
 | `AATXE_PR` / `GITHUB_REF` | (auto) | — | PR number; auto-detected on Actions. |
+
+## Local dashboard (`aatxe ui`)
+
+```bash
+aatxe ui                      # serve http://127.0.0.1:4866, open browser
+make ui-demo                  # offline demo: stub agent + stub council, no LLM
+```
+
+A localhost realtime dashboard (embedded static frontend, no Node
+toolchain — ships inside the binary). Three layers, each usable without
+the next:
+
+1. **Live perf sink.** Any `RunReport` POSTed to `/api/runs`, any
+   `perf-vs` run landing in `tmp/perf-vs/`, and any saved baseline in
+   `.aatxe/baselines/` streams into the browser as it happens.
+2. **Coding agents.** Type a task, hit spawn: the agent works in an
+   isolated git worktree on branch `aatxe-ui/<session>-<id>` — never
+   your checkout. Three backends via `--agent-backend`: `claude` (the
+   local `claude` CLI in print mode), `gemini` (a built-in tool-use loop
+   over the Gemini API — `read_file`/`write_file`/`list_files`/
+   `run_command`, needs `GEMINI_API_KEY`; `make ui` sources it from
+   `GEMINI_ENV`), and `stub` (offline scripted runner). Every time its working tree changes, the bench
+   suite re-runs there and the head-vs-base `CompareReport` is pushed
+   over SSE: you watch a per-bench median trajectory with the same
+   three-signal verdicts the CI gate uses. The base side is benched once
+   per session in the shared `perf-vs` worktree. When the agent exits,
+   its changes are committed on its branch and `aatxe council` reviews
+   the branch diff (`--council stub|real|off`).
+3. **Tournaments.** Spawn K agents on the same task (each gets a
+   distinct strategy hint — minimal-diff, performance-first, …) and a
+   live leaderboard ranks them by `improvements − 2·regressions −
+   1.5·council criticals`, ties broken by net median delta.
+
+Every event is appended to `.aatxe/ui/sessions/<id>/events.jsonl` before
+broadcast — refreshing replays the session, and past sessions are
+browsable from the rail. Works in any repo with an aatxe SDK via
+`--bench-cmd "<command that prints a RunReport JSON>"`.
+
+The claude agent runs with `--permission-mode acceptEdits` and the tool
+set `Read Grep Glob Edit Write Bash`; the gemini agent's file tools are
+path-confined to the worktree and its `run_command` executes there with
+a 120 s timeout. The council subprocess keeps its own read-only
+allowlist. Built with the `ui` cargo
+feature (default-on); `cargo install aatxe --no-default-features` for a
+slim CLI.
 
 ## Evals
 

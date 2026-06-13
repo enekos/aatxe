@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aatxe ui</title>
+<link rel="stylesheet" href="/assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🐂</text></svg>">
+</head>
+<body>
+<header>
+  <div class="brand">aatxe <span class="brand-ui">ui</span></div>
+  <div id="session-meta" class="session-meta">connecting…</div>
+  <div class="header-right">
+    <span id="history-banner" class="history-banner hidden">viewing past session
+      <button id="back-to-live">back to live</button>
+    </span>
+    <span id="conn" class="conn" title="event stream">●</span>
+  </div>
+</header>
+
+<div class="layout">
+  <nav id="rail">
+    <section class="spawn">
+      <textarea id="task" rows="3" placeholder="Task for the agent(s)…&#10;e.g. speed up diff::parse_unified_diff without changing its API"></textarea>
+      <div class="spawn-row">
+        <select id="count" title="1 = single agent · 2+ = tournament">
+          <option value="1">1 agent</option>
+          <option value="2">2 — tournament</option>
+          <option value="3">3 — tournament</option>
+          <option value="4">4 — tournament</option>
+          <option value="6">6 — tournament</option>
+        </select>
+        <button id="spawn">spawn</button>
+      </div>
+      <div id="spawn-error" class="spawn-error"></div>
+    </section>
+    <section>
+      <h2>agents</h2>
+      <ul id="agent-list" class="nav-list"></ul>
+    </section>
+    <section>
+      <h2>tournaments</h2>
+      <ul id="tournament-list" class="nav-list"></ul>
+    </section>
+    <section>
+      <h2>external</h2>
+      <ul id="external-list" class="nav-list"></ul>
+    </section>
+    <section>
+      <h2>sessions <button id="load-sessions" class="mini">↻</button></h2>
+      <ul id="session-list" class="nav-list"></ul>
+    </section>
+    <footer class="rail-foot">score = imp − 2·reg − 1.5·crit</footer>
+  </nav>
+
+  <main id="main">
+    <div class="empty">
+      <p>🐂 spawn an agent, or run <code>aatxe perf-vs</code> in a terminal and watch it appear.</p>
+    </div>
+  </main>
+</div>
+
+<script src="/assets/chart.js"></script>
+<script src="/assets/app.js"></script>
+</body>
+</html>
