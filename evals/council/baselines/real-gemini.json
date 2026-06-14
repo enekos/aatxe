@@ -1,0 +1,42 @@
+{
+  "_comment": "PLACEHOLDER baseline for the Gemini backend. Run `make evals-update-real-gemini-baseline` with GEMINI_API_KEY set to replace this with a real run.",
+  "schemaVersion": 1,
+  "startedAt": "2026-06-14T00:00:00Z",
+  "aatxeVersion": "0.1.1",
+  "council": {
+    "casesTotal": 0,
+    "casesFullyRecalled": 0,
+    "casesOverCap": 0,
+    "casesWithJudgeError": 0,
+    "recall": {
+      "criticalCaught": 0,
+      "criticalTotal": 0,
+      "majorCaught": 0,
+      "majorTotal": 0,
+      "minorCaught": 0,
+      "minorTotal": 0,
+      "nitCaught": 0,
+      "nitTotal": 0
+    },
+    "criticalPrecision": 0,
+    "criticalRecall": 0,
+    "criticalF1": 0,
+    "severityCalibrationMae": 0,
+    "judgeBrierScore": 0,
+    "avgFalsePositivesPerCase": 0,
+    "forbiddenPathFindings": 0,
+    "avgLatencyMs": 0,
+    "totalPromptTokens": 0,
+    "totalCompletionTokens": 0,
+    "perCase": []
+  },
+  "stats": {
+    "scenariosTotal": 6,
+    "scenariosPassed": 6,
+    "passRate": 1,
+    "observedNullFpr": 0,
+    "observedBorderlineTpr": 1,
+    "perScenario": []
+  },
+  "councilUsedRealLlm": true
+}

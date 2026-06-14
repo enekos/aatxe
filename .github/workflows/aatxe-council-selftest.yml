@@ -17,18 +17,17 @@
 #      so the council can be exercised without an open PR — useful for
 #      smoke-testing the pipeline in isolation (or under `act`).
 #
-#   3. Real LLM, real PR diff (workflow_dispatch with `mode=real` and
-#      the right secret). Requires either `KIMI_API_KEY` (pi-proxy
-#      backend) or Claude Code auth on the runner (claude-code backend).
-#      Posts the sticky `<!-- aatxe:council -->` comment when triggered
-#      on a real PR.
+#   3. Real LLM, real PR diff (auto on `pull_request` when a backend
+#      secret is provisioned; also workflow_dispatch with `mode=real`).
+#      Requires `GEMINI_API_KEY` (gemini backend, preferred), or
+#      `ANTHROPIC_API_KEY` (claude-code backend), or `KIMI_API_KEY`
+#      (pi-proxy backend). Posts the sticky `<!-- aatxe:council -->`
+#      comment on the PR.
 #
-# Default `pull_request` triggers mode 1 only — mode 3 is gated behind
-# `workflow_dispatch` so the PR queue never blocks on real-LLM cost or
-# token availability. Once `KIMI_API_KEY` is provisioned as a repo
-# secret + a `pi` install step is wired up, this workflow can be
-# extended to auto-promote `pull_request` runs to mode 3 when the
-# secret is present.
+# `pull_request` runs auto-promote to mode 3 when a backend secret is
+# present on the repo — that's the real-PR dogfooding loop. With no
+# secret provisioned (and always on fork PRs, which never see secrets)
+# they fall back to mode 1, free and deterministic.
 
 name: aatxe-council-selftest
 
@@ -51,13 +50,14 @@ on:
         default: ''
         type: string
       backend:
-        description: "LLM backend when mode=real (pi-proxy | claude-code)"
+        description: "LLM backend when mode=real (pi-proxy | claude-code | gemini)"
         required: false
-        default: 'pi-proxy'
+        default: 'gemini'
         type: choice
         options:
-          - pi-proxy
+          - gemini
           - claude-code
+          - pi-proxy
 
 permissions:
   contents: read
@@ -85,24 +85,32 @@ jobs:
         env:
           INPUT_MODE: ${{ github.event.inputs.mode }}
           INPUT_PR: ${{ github.event.inputs.pr-number }}
+          INPUT_BACKEND: ${{ github.event.inputs.backend }}
           PR_NUM: ${{ github.event.pull_request.number }}
           # Don't expand the secret into the shell — just check
           # presence by length-of-non-empty. GH masks the value in logs
           # but reading it via env keeps it out of the rendered command.
           HAS_KIMI: ${{ secrets.KIMI_API_KEY != '' }}
           HAS_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_GEMINI: ${{ secrets.GEMINI_API_KEY != '' }}
         run: |
-          # Default to `stub` for pull_request events; honor the input
-          # for workflow_dispatch. `real` falls back to `stub` when the
-          # required backend secret isn't present so the job still runs
-          # green instead of erroring on a missing key.
+          # Default to `stub` for pull_request events unless a backend
+          # secret is provisioned, in which case auto-promote to `real`
+          # for dogfooding. Honor the explicit input for workflow_dispatch.
+          # `real` falls back to `stub` when the required backend secret
+          # isn't present so the job still runs green instead of erroring
+          # on a missing key.
           mode="${INPUT_MODE:-stub}"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            mode="stub"
+            if [ "$HAS_GEMINI" = "true" ] || [ "$HAS_ANTHROPIC" = "true" ] || [ "$HAS_KIMI" = "true" ]; then
+              mode="real"
+            else
+              mode="stub"
+            fi
           fi
           pr="${INPUT_PR:-$PR_NUM}"
 
-          if [ "$mode" = "real" ] && [ "$HAS_KIMI" != "true" ] && [ "$HAS_ANTHROPIC" != "true" ]; then
+          if [ "$mode" = "real" ] && [ "$HAS_KIMI" != "true" ] && [ "$HAS_ANTHROPIC" != "true" ] && [ "$HAS_GEMINI" != "true" ]; then
             echo "    → mode=real requested but no backend secret set; downgrading to stub"
             mode="stub"
           fi
@@ -111,9 +119,23 @@ jobs:
             mode="fixture"
           fi
 
-          echo "mode=$mode"     >> "$GITHUB_OUTPUT"
-          echo "pr=$pr"         >> "$GITHUB_OUTPUT"
-          echo "    → resolved: mode=$mode pr=$pr"
+          # Backend: explicit dispatch input wins; otherwise prefer gemini
+          # when GEMINI_API_KEY is set, then claude-code, then pi-proxy.
+          backend="${INPUT_BACKEND:-}"
+          if [ -z "$backend" ]; then
+            if [ "$HAS_GEMINI" = "true" ]; then
+              backend="gemini"
+            elif [ "$HAS_ANTHROPIC" = "true" ]; then
+              backend="claude-code"
+            else
+              backend="pi-proxy"
+            fi
+          fi
+
+          echo "mode=$mode"       >> "$GITHUB_OUTPUT"
+          echo "pr=$pr"           >> "$GITHUB_OUTPUT"
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "    → resolved: mode=$mode pr=$pr backend=$backend"
 
       - name: Run council (stub LLM, real PR diff)
         if: steps.cfg.outputs.mode == 'stub' && steps.cfg.outputs.pr != ''
@@ -147,12 +169,14 @@ jobs:
           KIMI_BASE_URL: ${{ secrets.KIMI_BASE_URL }}
           KIMI_MODEL: ${{ secrets.KIMI_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p /tmp/council
           ./target/release/aatxe council \
             --pr ${{ steps.cfg.outputs.pr }} \
-            --backend ${{ github.event.inputs.backend || 'pi-proxy' }} \
+            --backend ${{ steps.cfg.outputs.backend }} \
             --confidence-floor 0.55 \
             --markdown /tmp/council/selftest.md \
             --out /tmp/council/selftest.json \
