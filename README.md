@@ -583,11 +583,15 @@ aatxe. Locally, `aatxe perf-vs --bench core|ast|council|big-diff|all
 ```bash
 aatxe ui                      # serve http://127.0.0.1:4866, open browser
 make ui-demo                  # offline demo: stub agent + stub council, no LLM
+make ui-build                 # rebuild the frontend bundle after editing crates/aatxe-ui/ui
 ```
 
-A localhost realtime dashboard (embedded static frontend, no Node
-toolchain — ships inside the binary). Three layers, each usable without
-the next:
+A localhost realtime dashboard. The frontend is a **Svelte** app (source
+in `crates/aatxe-ui/ui/`, built with Vite); its compiled bundle is
+committed under `crates/aatxe-ui/assets/` and baked into the binary with
+`include_str!`, so `cargo install aatxe` still ships the whole dashboard
+with no Node toolchain at build time — Node is only needed to rebuild the
+frontend (`make ui-build`). Three layers, each usable without the next:
 
 1. **Live perf sink.** Any `RunReport` POSTed to `/api/runs`, any
    `perf-vs` run landing in `tmp/perf-vs/`, and any saved baseline in

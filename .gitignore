@@ -8,6 +8,11 @@ sdk/ts/dist
 sdk/ts/*.tsbuildinfo
 sdk/go/.aatxe-cache
 
+# Svelte dashboard frontend — node_modules only; the built bundle in
+# crates/aatxe-ui/assets is committed (the Rust crate embeds it).
+crates/aatxe-ui/ui/node_modules
+crates/aatxe-ui/ui/.vite
+
 # Example artifacts
 examples/**/node_modules
 examples/**/target

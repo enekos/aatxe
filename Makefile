@@ -55,6 +55,12 @@ build-go: ## go vet the Go SDK (build is implicit in `go test`)
 	$(call say,build-go)
 	cd sdk/go && $(GO) vet ./...
 
+.PHONY: ui-build
+ui-build: ## Rebuild the Svelte dashboard bundle into crates/aatxe-ui/assets (commit the result). Only needed after editing crates/aatxe-ui/ui.
+	$(call say,ui-build)
+	cd crates/aatxe-ui/ui && [ -d node_modules ] || $(NPM) install --silent
+	cd crates/aatxe-ui/ui && $(NPM) run --silent build
+
 # ----------------------------------------------------------------------------
 # Quality gates
 # ----------------------------------------------------------------------------
