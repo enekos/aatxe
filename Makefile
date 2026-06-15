@@ -15,6 +15,7 @@ CARGO       ?= cargo
 GO          ?= go
 NODE        ?= node
 NPM         ?= npm
+PNPM        ?= pnpm
 ACT         ?= act
 
 REPO_ROOT   := $(shell pwd)
@@ -54,6 +55,12 @@ build-ts: ## Type-check + emit dist/ for the TS SDK
 build-go: ## go vet the Go SDK (build is implicit in `go test`)
 	$(call say,build-go)
 	cd sdk/go && $(GO) vet ./...
+
+.PHONY: ui-build
+ui-build: ## Rebuild the Svelte dashboard bundle into crates/aatxe-ui/assets (commit the result). Only needed after editing crates/aatxe-ui/ui. Uses pnpm.
+	$(call say,ui-build)
+	cd crates/aatxe-ui/ui && [ -d node_modules ] || $(PNPM) install
+	cd crates/aatxe-ui/ui && $(PNPM) run build
 
 # ----------------------------------------------------------------------------
 # Quality gates

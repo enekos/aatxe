@@ -1,8 +1,10 @@
 //! Axum router: embedded static frontend + JSON API + SSE event stream.
 //!
-//! The frontend is three hand-written static files compiled into the
-//! binary with `include_str!` — no Node toolchain, no build step, so
-//! `cargo install aatxe` ships the whole dashboard.
+//! The frontend is a Svelte app (source in `ui/`) compiled by Vite into
+//! `assets/{index.html,app.js,app.css}`, which are baked into the binary with
+//! `include_str!`. The build output is committed, so `cargo install aatxe`
+//! ships the whole dashboard with no Node toolchain at build time — only when
+//! changing the frontend (`make ui-build`).
 
 use crate::agents::{self, SpawnRequest};
 use crate::bus::EventBus;
@@ -24,8 +26,7 @@ use tokio_stream::{Stream, StreamExt};
 pub fn build_router(state: SharedState) -> Router {
     Router::new()
         .route("/", get(index))
-        .route("/assets/style.css", get(style_css))
-        .route("/assets/chart.js", get(chart_js))
+        .route("/assets/app.css", get(app_css))
         .route("/assets/app.js", get(app_js))
         .route("/api/events", get(sse_events))
         .route("/api/state", get(api_state))
@@ -42,17 +43,10 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("../assets/index.html"))
 }
 
-async fn style_css() -> impl IntoResponse {
+async fn app_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css")],
-        include_str!("../assets/style.css"),
-    )
-}
-
-async fn chart_js() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "application/javascript")],
-        include_str!("../assets/chart.js"),
+        include_str!("../assets/app.css"),
     )
 }
 
@@ -376,12 +370,7 @@ mod tests {
     async fn index_and_assets_are_embedded() {
         let dir = tempfile::tempdir().unwrap();
         let app = build_router(test_state(dir.path()));
-        for path in [
-            "/",
-            "/assets/app.js",
-            "/assets/chart.js",
-            "/assets/style.css",
-        ] {
+        for path in ["/", "/assets/app.js", "/assets/app.css"] {
             let resp = app
                 .clone()
                 .oneshot(Request::get(path).body(Body::empty()).unwrap())
