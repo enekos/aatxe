@@ -469,7 +469,7 @@ evals-real: $(TMP) build-rust ## Run the eval harness using the real Kimi backen
 evals-real-gemini: $(TMP) build-rust ## Run the eval harness using the real Gemini backend (direct HTTP, no gate). Requires GEMINI_API_KEY.
 	$(call say,evals-real-gemini)
 	@if [ -z "$$GEMINI_API_KEY" ]; then \
-	    echo "    ✗ GEMINI_API_KEY is unset. Export it and rerun (model via GEMINI_MODEL, default gemini-2.5-flash)."; \
+	    echo "    ✗ GEMINI_API_KEY is unset. Export it and rerun (model via GEMINI_MODEL, default gemini-2.5-pro)."; \
 	    exit 1; \
 	fi
 	$(AATXE_BIN) evals \
@@ -478,6 +478,41 @@ evals-real-gemini: $(TMP) build-rust ## Run the eval harness using the real Gemi
 	    --out $(TMP)/aatxe-evals-real-gemini.json \
 	    --markdown $(TMP)/aatxe-evals-real-gemini.md
 	@echo "    ✓ evals-real-gemini: wrote $(TMP)/aatxe-evals-real-gemini.{json,md}"
+
+# ----------------------------------------------------------------------------
+# Gemini real-LLM baseline gate
+# ----------------------------------------------------------------------------
+EVALS_REAL_GEMINI_BASELINE := $(REPO_ROOT)/evals/council/baselines/real-gemini.json
+
+.PHONY: evals-real-gemini-gate
+evals-real-gemini-gate: $(TMP) build-rust ## Run real-LLM eval (gemini backend) + gate against the committed real-gemini baseline. Looser tolerances auto-applied. Requires GEMINI_API_KEY.
+	$(call say,evals-real-gemini-gate)
+	@if [ -z "$$GEMINI_API_KEY" ]; then \
+	    echo "    ✗ GEMINI_API_KEY is unset. Export it and rerun (model via GEMINI_MODEL, default gemini-2.5-pro)."; \
+	    exit 1; \
+	fi
+	$(AATXE_BIN) evals \
+	    --council-real-llm \
+	    --backend gemini \
+	    --out $(TMP)/aatxe-evals-real-gemini.json \
+	    --markdown $(TMP)/aatxe-evals-real-gemini.md \
+	    --baseline $(EVALS_REAL_GEMINI_BASELINE)
+	@echo "    ✓ evals-real-gemini-gate: wrote $(TMP)/aatxe-evals-real-gemini.{json,md}"
+
+.PHONY: evals-update-real-gemini-baseline
+evals-update-real-gemini-baseline: $(TMP) build-rust ## Replace the committed real-gemini baseline with a fresh real-LLM run. Use deliberately on intentional improvements.
+	$(call say,evals-update-real-gemini-baseline)
+	@if [ -z "$$GEMINI_API_KEY" ]; then \
+	    echo "    ✗ GEMINI_API_KEY is unset. Export it and rerun (model via GEMINI_MODEL, default gemini-2.5-pro)."; \
+	    exit 1; \
+	fi
+	$(AATXE_BIN) evals \
+	    --council-real-llm \
+	    --backend gemini \
+	    --out $(EVALS_REAL_GEMINI_BASELINE) \
+	    --markdown $(REPO_ROOT)/evals/council/baselines/real-gemini.md \
+	    --no-fail
+	@echo "    ✓ wrote $(EVALS_REAL_GEMINI_BASELINE) — commit it to update the gate"
 
 .PHONY: evals-update-baseline
 evals-update-baseline: evals-no-gate ## Replace the committed stub baseline with the current run. Use only when corpus or pipeline changes are deliberate.

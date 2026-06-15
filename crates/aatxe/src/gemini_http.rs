@@ -49,9 +49,9 @@ use std::time::Duration;
 /// Default OpenAI-compatible chat-completions endpoint.
 const DEFAULT_BASE_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-/// Default model. A strong, low-latency general model; override with
-/// `GEMINI_MODEL` (e.g. `gemini-2.5-pro` for higher quality at more cost).
-const DEFAULT_MODEL: &str = "gemini-2.5-flash";
+/// Default model. Highest-quality general model; override with
+/// `GEMINI_MODEL` (e.g. `gemini-2.5-flash` for lower latency/cost).
+const DEFAULT_MODEL: &str = "gemini-2.5-pro";
 
 /// Read `GEMINI_MODEL` or fall back to [`DEFAULT_MODEL`]. Infallible and
 /// key-free so the report-header model display works even when no API key

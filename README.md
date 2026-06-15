@@ -403,7 +403,7 @@ CLAUDE_BIN=/custom/path/to/claude CLAUDE_MODEL=opus \
     CLAUDE_MAX_BUDGET_USD=2.0 \
     aatxe council --pr 42 --backend claude-code
 
-# gemini (direct API; model via GEMINI_MODEL or --model, default gemini-2.5-flash)
+# gemini (direct API; model via GEMINI_MODEL or --model, default gemini-2.5-pro)
 GEMINI_API_KEY=... GEMINI_MODEL=gemini-2.5-pro \
     aatxe council --pr 42 --backend gemini
 ```
@@ -698,6 +698,7 @@ file per backend:
 |---|---:|---:|---:|---:|---:|---:|---|
 | pi-proxy (Kimi K2-thinking, tools on) | 15 cases | 9/15 | 0.286 | 0.444 | 2.27 | 250 s | [`real-pi.json`](evals/council/baselines/real-pi.json) |
 | claude-code (Sonnet, OAuth) | 24 cases | 12/24 | 0.750 | 0.857 | 2.38 | 26 s | [`real-claude.json`](evals/council/baselines/real-claude.json) |
+| gemini (Gemini 2.5 Pro, pre-packed context) | pending | — | — | — | — | — | [`real-gemini.json`](evals/council/baselines/real-gemini.json) |
 
 These are kept as **quality benchmarks**, not deterministic gates —
 real-LLM output is non-deterministic, so the stub remains the CI gate
