@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Svelte frontend for the aatxe ui dashboard. Builds into ../assets, which the Rust crate embeds via include_str!. Run `npm run build` (or `make ui-build`) after changing anything here.",
+  "description": "Svelte frontend for the aatxe ui dashboard. Builds into ../assets, which the Rust crate embeds via include_str!. Run `pnpm build` (or `make ui-build`) after changing anything here.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,5 +13,8 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "svelte": "^5.0.0",
     "vite": "^6.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
   }
 }
