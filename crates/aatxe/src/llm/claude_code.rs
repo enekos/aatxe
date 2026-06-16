@@ -1,6 +1,6 @@
 //! Claude Code proxy — `claude` CLI as an [`LlmClient`] backend.
 //!
-//! Modelled byte-for-byte on [`crate::pi_proxy`]; the only meaningful
+//! Modelled byte-for-byte on [`crate::llm::pi_proxy`]; the only meaningful
 //! differences are the spawn argv (Claude Code's `--print` surface) and
 //! the output parser (Claude Code emits `--output-format json` which
 //! carries the final assistant turn plus per-call usage tokens).
@@ -44,7 +44,7 @@
 //! occasionally wraps JSON answers in a markdown fence even when told
 //! not to) plus the usage tokens for cost telemetry.
 
-use crate::subprocess_llm::{
+use crate::llm::subprocess_llm::{
     join_with_blank_lines, partition_messages, sanitize_text_output, spawn_and_wait,
 };
 use aatxe_council::llm::{ChatRequest, ChatResponse, LlmClient, LlmError};
@@ -300,7 +300,7 @@ struct ClaudeUsage {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::subprocess_llm::test_fixture::{fake_binary, fake_sleeping_binary};
+    use crate::llm::subprocess_llm::test_fixture::{fake_binary, fake_sleeping_binary};
     use aatxe_council::llm::ChatMessage;
     use std::fs;
 

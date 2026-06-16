@@ -47,7 +47,7 @@
 //! pipeline already parallelises proposers across personas, so wall-clock
 //! is roughly the slowest single agent call rather than 4×.
 
-use crate::subprocess_llm::{
+use crate::llm::subprocess_llm::{
     join_with_blank_lines, partition_messages, sanitize_text_output, spawn_and_wait,
 };
 use aatxe_core::secret::Secret;
@@ -218,7 +218,7 @@ impl LlmClient for PiAgentClient {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::subprocess_llm::test_fixture::{fake_binary, fake_sleeping_binary};
+    use crate::llm::subprocess_llm::test_fixture::{fake_binary, fake_sleeping_binary};
     use aatxe_council::llm::ChatMessage;
     use std::fs;
 

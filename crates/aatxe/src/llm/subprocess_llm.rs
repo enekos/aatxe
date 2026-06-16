@@ -1,6 +1,6 @@
 //! Shared helpers for [`LlmClient`] backends that drive a child CLI.
 //!
-//! Both [`crate::pi_proxy`] and [`crate::claude_code`] follow the same
+//! Both [`crate::llm::pi_proxy`] and [`crate::llm::claude_code`] follow the same
 //! shape: build an argv, spawn the binary, stream the user payload on
 //! stdin, wait with a wall-clock deadline, then sanitise the model's
 //! stdout. The pieces shared between the two live here so a bug fix or

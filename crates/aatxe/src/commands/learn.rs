@@ -9,7 +9,7 @@
 
 use crate::cli::{LearnArgs, LearnCommand, LearnCompactArgs, LearnHarvestArgs, LearnShowArgs};
 use crate::commands::Outcome;
-use crate::github_http::UreqClient;
+use crate::github::github_http::UreqClient;
 use aatxe_core::github::{detect_context, GithubContext};
 use aatxe_council::types::{CouncilReport, Severity};
 use aatxe_learn::harvest::{ShippedFindingRef, DEFAULT_TRUSTED_ASSOCIATIONS};

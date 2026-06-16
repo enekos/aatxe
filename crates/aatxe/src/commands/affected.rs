@@ -1,7 +1,7 @@
 //! `aatxe affected` — print the affected bench files for a given diff base.
 
 use crate::adapter::real_fs::{RealFs, RealGit};
-use crate::ast_import_extractor::AstImportExtractor;
+use crate::ast::ast_import_extractor::AstImportExtractor;
 use crate::cli::AffectedArgs;
 use aatxe_core::affected::{resolve_affected, AffectedOptions};
 use anyhow::Result;

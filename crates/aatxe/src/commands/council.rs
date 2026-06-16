@@ -2,24 +2,24 @@
 //! render the sticky markdown body, and optionally post it.
 //!
 //! Wires together:
-//! * [`crate::gh_diff::fetch_pr_diff`] — pulls the unified diff over
+//! * [`crate::github::gh_diff::fetch_pr_diff`] — pulls the unified diff over
 //!   `Accept: application/vnd.github.v3.diff`.
-//! * [`crate::pi_proxy::PiAgentClient`] — spawns the local `pi` coding
+//! * [`crate::llm::pi_proxy::PiAgentClient`] — spawns the local `pi` coding
 //!   agent per LLM call so proposers can `read`/`grep`/`find`/`ls` the
 //!   repo under review. Uses `KIMI_API_KEY` (forwarded to the child).
 //! * [`aatxe_council::pipeline::run_council`] — the proposer→judge
 //!   pipeline lives in the pure crate.
-//! * [`crate::github_http::UreqClient`] — same sticky-comment client the
+//! * [`crate::github::github_http::UreqClient`] — same sticky-comment client the
 //!   perf gate uses, with the council's own marker.
 
-use crate::claude_code::{ClaudeCodeClient, ClaudeCodeConfig};
 use crate::cli::{BackendArg, CouncilArgs};
 use crate::commands::Outcome;
-use crate::gemini_http::{self, GeminiClient, GeminiConfig};
-use crate::gh_diff::fetch_pr_diff;
-use crate::github_http::UreqClient;
-use crate::pi_proxy::{PiAgentClient, PiConfig};
-use crate::stub_client::{stub_enabled, StubKimi};
+use crate::github::gh_diff::fetch_pr_diff;
+use crate::github::github_http::UreqClient;
+use crate::llm::claude_code::{ClaudeCodeClient, ClaudeCodeConfig};
+use crate::llm::gemini_http::{self, GeminiClient, GeminiConfig};
+use crate::llm::pi_proxy::{PiAgentClient, PiConfig};
+use crate::llm::stub_client::{stub_enabled, StubKimi};
 use aatxe_core::github::{detect_context, validate_sticky, GithubContext};
 use aatxe_council::diff::parse_unified_diff;
 use aatxe_council::events::{CouncilEvent, EventSink, NullSink};

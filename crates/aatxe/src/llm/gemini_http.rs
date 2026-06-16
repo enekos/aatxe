@@ -7,7 +7,7 @@
 //! and can `read`/`grep`/`glob` the repo under review. Gemini has no such
 //! agent binary, so this backend is a *direct* blocking HTTP client over
 //! [`ureq`] — the same dependency the sticky-comment poster
-//! ([`crate::github_http`]) already uses. Gemini sees exactly the
+//! ([`crate::github::github_http`]) already uses. Gemini sees exactly the
 //! pre-packed prompt the pipeline builds (diff + AST scope + related-file
 //! context) and nothing else; it has no repo tool access. That makes it
 //! the "pre-packed context, no tools" arm of the backend experiment — and
@@ -39,7 +39,7 @@
 //! a wrapping markdown fence from the content (`response_format` should
 //! prevent it, but models occasionally add one anyway).
 
-use crate::subprocess_llm::sanitize_text_output;
+use crate::llm::subprocess_llm::sanitize_text_output;
 use aatxe_council::llm::{ChatRequest, ChatResponse, LlmClient, LlmError, Role};
 use serde::Deserialize;
 use std::env;
