@@ -6,18 +6,12 @@
 //! * `2` — regressions detected and `--fail-on-regression` was passed.
 
 mod adapter;
-mod ast_import_extractor;
-mod ast_scope;
-mod claude_code;
+mod ast;
 mod cli;
 mod commands;
 mod curator;
-mod gemini_http;
-mod gh_diff;
-mod github_http;
-mod pi_proxy;
-mod stub_client;
-mod subprocess_llm;
+mod github;
+mod llm;
 
 use std::process::ExitCode;
 

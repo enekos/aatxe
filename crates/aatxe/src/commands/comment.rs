@@ -1,7 +1,7 @@
 //! `aatxe comment` — post / update the sticky PR comment.
 
 use crate::cli::CommentArgs;
-use crate::github_http::UreqClient;
+use crate::github::github_http::UreqClient;
 use aatxe_core::github::{detect_context, validate_sticky, GithubContext};
 use aatxe_core::secret::Secret;
 use anyhow::{anyhow, Context, Result};

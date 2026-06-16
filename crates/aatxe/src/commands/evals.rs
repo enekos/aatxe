@@ -2,8 +2,8 @@
 //!
 //! 1. Run the stats eval (deterministic synthetic A/B pairs).
 //! 2. Run the council eval over every case in the corpus directory.
-//!    LLM client is the deterministic [`crate::stub_client::StubKimi`] by
-//!    default; `--council-real-llm` swaps in the [`crate::pi_proxy::PiAgentClient`]
+//!    LLM client is the deterministic [`crate::llm::stub_client::StubKimi`] by
+//!    default; `--council-real-llm` swaps in the [`crate::llm::pi_proxy::PiAgentClient`]
 //!    (requires `KIMI_API_KEY` so the spawned `pi` child can reach
 //!    Moonshot).
 //! 3. Serialise the result to JSON.
@@ -11,12 +11,12 @@
 //! 5. Optionally diff against a baseline; exit 2 on regression past
 //!    tolerance.
 
-use crate::claude_code::{ClaudeCodeClient, ClaudeCodeConfig};
 use crate::cli::{BackendArg, EvalsArgs};
 use crate::commands::Outcome;
-use crate::gemini_http::{self, GeminiClient, GeminiConfig};
-use crate::pi_proxy::{PiAgentClient, PiConfig};
-use crate::stub_client::StubKimi;
+use crate::llm::claude_code::{ClaudeCodeClient, ClaudeCodeConfig};
+use crate::llm::gemini_http::{self, GeminiClient, GeminiConfig};
+use crate::llm::pi_proxy::{PiAgentClient, PiConfig};
+use crate::llm::stub_client::StubKimi;
 use aatxe_council::llm::LlmClient;
 use aatxe_council::pipeline::{run_council_with_files, CouncilOptions};
 use aatxe_evals::council::{
@@ -114,7 +114,8 @@ pub fn execute(args: EvalsArgs) -> Result<Outcome> {
                 .into_iter()
                 .map(|f| f.path)
                 .collect();
-            let ast_scope = crate::ast_scope::build_scope_for_review(&files_map, &changed_paths);
+            let ast_scope =
+                crate::ast::ast_scope::build_scope_for_review(&files_map, &changed_paths);
             eprintln!(
                 "  • case {} → {} ({} file fixtures, AST scope: {} bytes)",
                 case.name,

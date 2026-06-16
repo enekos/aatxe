@@ -13,7 +13,7 @@
 //! All three normalise the output through [`aatxe_core::stats::summarize_samples`]
 //! so downstream consumers see identical statistics regardless of language.
 
-use crate::ast_import_extractor::AstImportExtractor;
+use crate::ast::ast_import_extractor::AstImportExtractor;
 use aatxe_core::affected::{resolve_affected, AffectedOptions};
 use aatxe_core::types::{AffectedScope as CoreScope, Language, RunReport};
 use anyhow::{Context, Result};

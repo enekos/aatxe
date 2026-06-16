@@ -1,27 +1,35 @@
 # aatxe
 
-> Statistical microbenchmark + regression-gate harness for TypeScript, Go, and Rust.
+> Catch performance regressions on every pull request — with statistics, not vibes.
 
-**Aatxe** [/ˈaːtʃe/] is the red-bull spirit of Basque mythology that emerges
-from caves at night to identify and punish wrongdoers. The name is fitting:
-this tool benches your code on every PR, statistically compares head against
-base, posts a sticky comment, and gates CI when something regressed.
+**aatxe** benches your code on each PR, statistically compares the change against
+its base, and posts a single sticky comment that gates CI when something *actually*
+regressed. It speaks **TypeScript, Go, and Rust** through one shared JSON report
+format, runs as a **reusable GitHub Actions workflow** downstream repos call in one
+line, and ships as a single static binary (`curl … | sh`, or `cargo install`).
 
+```mermaid
+flowchart LR
+    PR([PR pushed]) --> H["bench HEAD<br/>(GitHub Actions)"]
+    PR --> B["bench base<br/>(GitHub Actions)"]
+    H --> C["compare<br/>median Δ · Mann–Whitney U · noise gate"]
+    B --> C
+    C --> M["sticky PR comment<br/>(updated in place)"]
 ```
-                ┌──────────────────────┐
-PR pushed  ─┬──▶│  GH Actions: HEAD     │ ─┐
-            │   └──────────────────────┘  │       ┌────────────┐       ┌──────────────┐
-            │   ┌──────────────────────┐  ├─▶ Compare ─▶ Sticky │ ─▶ │  GH PR comment │
-            └──▶│  GH Actions: base     │ ─┘  (median Δ +    PR comment │  (in-place)   │
-                └──────────────────────┘     MW-U + noise gate)        └──────────────┘
-```
 
-No LLM. No magic instrumentation. Statistics, not opinions. Verdicts come
-from numbers, not text generation.
+**Why you can trust the verdict.** No LLM, no magic instrumentation. A change is
+only flagged when the median shift is large enough, statistically significant under
+a non-parametric test, *and* clears a noise gate — three independent signals, all
+required. Numbers, not opinions. ([methodology](#methodology))
 
-A separate, **opt-in** subsystem — the [agent council](#agent-council) —
-layers semantic PR review on top, with its own sticky marker and its own
-exit-code gate. The perf gate above is untouched by it.
+**Plus an optional [agent council](#agent-council).** A mixture-of-agents LLM PR
+reviewer layers semantic review on top — its own sticky comment, its own exit-code
+gate, the perf gate untouched. It eats its own dogfood: the first published baseline
+is **0.857 critical-F1 at 2.4 false positives per case** on a 24-case labeled corpus
+([real-LLM baselines](#real-llm-baselines)).
+
+> **aatxe** [/ˈaːtʃe/] — the red-bull spirit of Basque mythology that emerges from
+> caves at night to identify and punish wrongdoers. Fitting, for a regression detector.
 
 ## Why this rebuild
 
@@ -36,9 +44,11 @@ with three sharper goals:
 * **GitHub Actions first-class.** Workflows ship in `.github/workflows/`,
   including a reusable `aatxe.yml` that downstream services can call.
 * **Testable end-to-end.** The core (`aatxe-core`) is pure — no IO, no
-  globals — and ships 52 unit + integration tests covering stats, the
+  globals — every side effect sits behind a trait so tests inject an
+  in-memory filesystem and git. The full workspace suite (stats, the
   three-signal verdict, markdown rendering, the affected-set graph across
-  all three languages, and the GitHub URL/header protocol.
+  all three languages, the GitHub protocol) runs on every PR via
+  `make check`.
 
 ## Hacking on aatxe
 
@@ -228,11 +238,17 @@ producer can emit complete reports without the Rust binary in the loop.
 
 ```
 aatxe/
-├── crates/
-│   ├── aatxe-core/         # types · stats · compare · report · affected · github (pure)
+├── crates/                 # six library crates + the CLI, layered so the brain exists once
+│   ├── aatxe-core/         # the brain: types · stats · compare · report · affected · github URLs (pure)
+│   ├── aatxe-ast/          # tree-sitter symbol/scope extraction for TS/Go/Rust (pure)
 │   ├── aatxe-council/      # MoA proposer→judge LLM PR-reviewer (pure)
-│   ├── aatxe-evals/        # eval harness — scores council + stats end to end
-│   └── aatxe/              # CLI binary + language adapters + reqwest GH client
+│   ├── aatxe-learn/        # bounded, self-healing per-repo learning corpus (pure)
+│   ├── aatxe-evals/        # eval harness — scores the council + stats engine end to end (pure)
+│   ├── aatxe-ui/           # local realtime dashboard (axum + an embedded Svelte build)
+│   └── aatxe/              # the CLI binary, organised internally as:
+│       #   commands/  subcommand impls          adapter/  per-language bench runners
+│       #   llm/       council backends          github/   ureq REST client + PR-diff fetch
+│       #   ast/       AST-scope + import glue    cli.rs    clap surface
 ├── sdk/
 │   ├── ts/                 # @aatxe/bench  npm package (bench API + runner)
 │   ├── go/                 # aatxe Go module (Bench + Suite)
