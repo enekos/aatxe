@@ -15,6 +15,7 @@
 
 use crate::cli::{PerfBenchArg, PerfVsArgs};
 use crate::commands::Outcome;
+use crate::sandbox::Isolation;
 use aatxe_core::types::{BenchRun, Language, RunReport, SCHEMA_VERSION};
 use aatxe_core::{compare_reports, has_regressions, render_markdown, CompareOptions};
 use anyhow::{anyhow, bail, Context, Result};
@@ -54,9 +55,14 @@ pub fn execute(args: PerfVsArgs) -> Result<Outcome> {
 
     ensure_worktree(&repo_root, &wt_path, &base_sha, args.verbose)?;
 
+    // Both sides run under the same isolation so the comparison stays fair.
+    // perf-vs only benches aatxe's own (Rust) binaries, so the guest image
+    // defaults to the Rust toolchain image.
+    let iso = Isolation::from_opts(&args.vm, Language::Rust)?;
+
     let benches = expand_bench(args.bench);
     eprintln!(
-        "perf-vs: HEAD {} vs {} ({}) · bench: {} · worktree: {}",
+        "perf-vs: HEAD {} vs {} ({}) · bench: {} · isolation: {} · worktree: {}",
         short(&head_sha),
         args.against,
         short(&base_sha),
@@ -65,11 +71,13 @@ pub fn execute(args: PerfVsArgs) -> Result<Outcome> {
             .map(|b| bench_slug(*b))
             .collect::<Vec<_>>()
             .join("+"),
+        if iso.is_microvm() { "microvm" } else { "local" },
         wt_path.display()
     );
 
-    let head_report = build_and_run_all(&repo_root, &benches, "head", &head_sha, args.verbose)?;
-    let base_report = build_and_run_all(&wt_path, &benches, "base", &base_sha, args.verbose)?;
+    let head_report =
+        build_and_run_all(&repo_root, &benches, "head", &head_sha, &iso, args.verbose)?;
+    let base_report = build_and_run_all(&wt_path, &benches, "base", &base_sha, &iso, args.verbose)?;
 
     let head_json = out_dir.join("head.json");
     let base_json = out_dir.join("base.json");
@@ -239,11 +247,12 @@ fn build_and_run_all(
     benches: &[PerfBenchArg],
     side: &str,
     sha: &str,
+    iso: &Isolation,
     verbose: bool,
 ) -> Result<RunReport> {
     let mut merged: Option<RunReport> = None;
     for b in benches {
-        let report = build_and_run(cwd, *b, side, sha, verbose)
+        let report = build_and_run(cwd, *b, side, sha, iso, verbose)
             .with_context(|| format!("running {} on {}", bench_slug(*b), side))?;
         match merged.as_mut() {
             None => merged = Some(report),
@@ -261,9 +270,48 @@ fn build_and_run(
     bench: PerfBenchArg,
     side: &str,
     sha: &str,
+    iso: &Isolation,
     verbose: bool,
 ) -> Result<RunReport> {
     let bin = bench_binary(bench);
+    let stdout_str = if iso.is_microvm() {
+        build_and_run_microvm(cwd, bin, bench, side, iso)?
+    } else {
+        build_and_run_host(cwd, bin, bench, side, verbose)?
+    };
+
+    // Big-diff-bench interleaves `METRIC k=v` lines (for the autoresearch
+    // loop) with the trailing RunReport JSON; council-bench emits the JSON
+    // directly. Strip any leading non-JSON lines before parsing so both
+    // protocols round-trip through the same code path.
+    let json_slice = strip_non_json_prefix(&stdout_str);
+    let mut report: RunReport = serde_json::from_str(json_slice).with_context(|| {
+        format!(
+            "parsing RunReport from {} stdout (first 200 bytes: {:?})",
+            bin,
+            &stdout_str[..stdout_str.len().min(200)]
+        )
+    })?;
+    // Stamp the ref we're actually benching. The bench binary uses
+    // env-driven defaults; overriding here keeps the report honest if
+    // someone runs it outside this command.
+    report.r#ref = short(sha).to_string();
+    if report.schema_version == 0 {
+        report.schema_version = SCHEMA_VERSION;
+    }
+    sanity_check_report(&report, bench)?;
+    Ok(report)
+}
+
+/// Build + run the bench directly on the host (the default path). Returns
+/// the runner's captured stdout.
+fn build_and_run_host(
+    cwd: &Path,
+    bin: &str,
+    bench: PerfBenchArg,
+    side: &str,
+    verbose: bool,
+) -> Result<String> {
     eprintln!("perf-vs: building {} ({})", bin, side);
     let build_status = Command::new("cargo")
         .args(["build", "--release", "--bin", bin])
@@ -306,28 +354,32 @@ fn build_and_run(
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    // Big-diff-bench interleaves `METRIC k=v` lines (for the autoresearch
-    // loop) with the trailing RunReport JSON; council-bench emits the JSON
-    // directly. Strip any leading non-JSON lines before parsing so both
-    // protocols round-trip through the same code path.
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let json_slice = strip_non_json_prefix(&stdout_str);
-    let mut report: RunReport = serde_json::from_str(json_slice).with_context(|| {
-        format!(
-            "parsing RunReport from {} stdout (first 200 bytes: {:?})",
-            bin,
-            &stdout_str[..stdout_str.len().min(200)]
-        )
-    })?;
-    // Stamp the ref we're actually benching. The bench binary uses
-    // env-driven defaults; overriding here keeps the report honest if
-    // someone runs it outside this command.
-    report.r#ref = short(sha).to_string();
-    if report.schema_version == 0 {
-        report.schema_version = SCHEMA_VERSION;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Build + run the bench inside a microVM. Both steps happen in one guest
+/// invocation so the binary is compiled for the guest, not the host. The
+/// sandbox points `CARGO_TARGET_DIR` at the persistent cache mount, so the
+/// freshly built binary lives at `$CARGO_TARGET_DIR/release/<bin>`.
+fn build_and_run_microvm(
+    cwd: &Path,
+    bin: &str,
+    bench: PerfBenchArg,
+    side: &str,
+    iso: &Isolation,
+) -> Result<String> {
+    eprintln!("perf-vs: building+running {} ({}) in microVM", bin, side);
+    // `bin` is a fixed identifier (see `bench_binary`), safe to interpolate.
+    let script =
+        format!("cargo build --release --bin {bin} && exec \"$CARGO_TARGET_DIR/release/{bin}\"");
+    let env = vec![("AATXE_SERVICE".to_string(), service_for(bench).to_string())];
+    let output = iso
+        .run_script(cwd, &script, &env)
+        .with_context(|| format!("running {bin} in microVM ({side})"))?;
+    if !output.status.success() {
+        bail!("{} in microVM exited with status {}", bin, output.status);
     }
-    sanity_check_report(&report, bench)?;
-    Ok(report)
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn service_for(bench: PerfBenchArg) -> &'static str {

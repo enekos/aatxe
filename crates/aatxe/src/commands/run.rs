@@ -7,6 +7,7 @@
 
 use crate::adapter::{self, RunSpec};
 use crate::cli::RunArgs;
+use crate::sandbox::Isolation;
 use aatxe_core::types::AffectedScope;
 use anyhow::{Context, Result};
 use std::fs;
@@ -46,6 +47,7 @@ pub fn execute(args: RunArgs) -> Result<()> {
         .as_ref()
         .map(|s| s.bench_files.iter().map(PathBuf::from).collect());
 
+    let isolation = Isolation::from_opts(&args.vm, lang)?;
     let spec = RunSpec {
         cwd: cwd.clone(),
         service,
@@ -54,6 +56,7 @@ pub fn execute(args: RunArgs) -> Result<()> {
         patterns: args.patterns.clone(),
         bench_files,
         verbose: args.verbose,
+        isolation,
     };
 
     let mut report = adapter::execute(lang, &spec)?;

@@ -62,6 +62,38 @@ pub enum Command {
     Ui(UiArgs),
 }
 
+/// Where benches execute — the backend for `--isolation`.
+#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
+pub enum IsolationArg {
+    /// Run on the host, directly. Fast, but subject to host noise
+    /// (background load, thermal throttling, other processes).
+    Local,
+    /// Run inside an ephemeral libkrun microVM via `krunvm` — pinned
+    /// vCPUs, fixed RAM, clean rootfs — for reproducible numbers. Needs
+    /// `krunvm` installed (`make microvm-setup`); works on macOS and Linux.
+    Microvm,
+}
+
+/// Shared microVM knobs, flattened into every bench-running subcommand.
+/// Only the parameters that meaningfully change results are surfaced;
+/// everything else uses libkrun defaults.
+#[derive(clap::Args, Debug, Clone)]
+pub struct VmOpts {
+    /// Where to run the bench. `local` (default) or `microvm`.
+    #[arg(long, value_enum, default_value_t = IsolationArg::Local)]
+    pub isolation: IsolationArg,
+    /// microVM vCPUs (only with `--isolation microvm`).
+    #[arg(long, env = "AATXE_VM_CPUS", default_value_t = crate::sandbox::DEFAULT_VM_CPUS)]
+    pub vm_cpus: u32,
+    /// microVM RAM in MiB (only with `--isolation microvm`).
+    #[arg(long, env = "AATXE_VM_MEM", default_value_t = crate::sandbox::DEFAULT_VM_MEM_MIB)]
+    pub vm_mem: u32,
+    /// OCI image for the guest (must ship the language toolchain). Defaults
+    /// per language: `rust:1` / `golang:1` / `node:22`.
+    #[arg(long, env = "AATXE_VM_IMAGE")]
+    pub vm_image: Option<String>,
+}
+
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
 pub enum PerfBenchArg {
     /// `examples/council-bench` — 9 micros covering the council's pure
@@ -129,6 +161,10 @@ pub struct PerfVsArgs {
     /// the final summary prints).
     #[arg(long)]
     pub verbose: bool,
+    /// microVM isolation knobs (`--isolation microvm` for predictable
+    /// numbers). Both sides of the A/B run in matching guests.
+    #[command(flatten)]
+    pub vm: VmOpts,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
@@ -177,6 +213,10 @@ pub struct RunArgs {
     /// Print runner stdout to the caller as it produces it.
     #[arg(long)]
     pub verbose: bool,
+    /// microVM isolation knobs. `--isolation microvm` runs the language
+    /// runner inside a libkrun guest for predictable numbers.
+    #[command(flatten)]
+    pub vm: VmOpts,
     /// Bench discovery globs (passed to the adapter). Defaults are language-specific.
     pub patterns: Vec<String>,
 }

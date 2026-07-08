@@ -240,16 +240,28 @@ ast-bench-self: ast-bench ## Compare the ast bench against itself — proves the
 #   BENCH     — `council` (default, ~5s) / `big-diff` (~30s) / `core` /
 #               `ast` / `all`.
 #   VERBOSE   — set to anything to stream cargo + bench output.
+#
+# microVM knobs (predictable numbers via a libkrun guest — see microvm-setup):
+#   ISOLATION — `local` (default) or `microvm`.
+#   VM_CPUS   — guest vCPUs (default 2).   VM_MEM — guest RAM MiB (default 2048).
+#   VM_IMAGE  — override the guest OCI image (default is per-language).
 
-REF   ?= origin/master
-BENCH ?= council
+REF       ?= origin/master
+BENCH     ?= council
+ISOLATION ?=
+VM_CPUS   ?=
+VM_MEM    ?=
+VM_IMAGE  ?=
+
+# Flags appended to `perf-vs` from the microVM knobs above (empty ⇒ host run).
+vmflags = $(if $(ISOLATION),--isolation $(ISOLATION),) $(if $(VM_CPUS),--vm-cpus $(VM_CPUS),) $(if $(VM_MEM),--vm-mem $(VM_MEM),) $(if $(VM_IMAGE),--vm-image $(VM_IMAGE),)
 
 .PHONY: perf-vs
 perf-vs: $(TMP) build-rust ## Local A/B perf-compare HEAD vs $(REF) via a sibling worktree. Knobs: REF, BENCH, VERBOSE.
 	$(call say,perf-vs)
 	$(AATXE_BIN) perf-vs --against $(REF) --bench $(BENCH) \
 	    --out-dir $(TMP)/perf-vs/$(BENCH) \
-	    $(if $(VERBOSE),--verbose,)
+	    $(if $(VERBOSE),--verbose,) $(vmflags)
 	@echo "    ✓ perf-vs: see $(TMP)/perf-vs/$(BENCH)/{head,base}.json + cmp.{json,md}"
 
 .PHONY: perf-vs-self
@@ -259,6 +271,41 @@ perf-vs-self: $(TMP) build-rust ## Smoke test: perf-vs against HEAD~1 (or origin
 	   $(AATXE_BIN) perf-vs --against $$ref --bench council \
 	       --out-dir $(TMP)/perf-vs/self
 	@echo "    ✓ perf-vs-self: see $(TMP)/perf-vs/self/cmp.md"
+
+# ----------------------------------------------------------------------------
+# microVM benches (predictable numbers via a libkrun guest)
+# ----------------------------------------------------------------------------
+#
+# `--isolation microvm` runs the bench inside an ephemeral libkrun microVM
+# (pinned vCPUs, fixed RAM, clean rootfs) so numbers don't drift with host
+# load. Works on macOS (Hypervisor.framework) and Linux (KVM). One-time
+# `microvm-setup` installs `krunvm`; the first run pulls the guest image.
+
+.PHONY: perf-vs-vm
+perf-vs-vm: ## perf-vs inside a libkrun microVM. Knobs: REF, BENCH, VM_CPUS, VM_MEM, VM_IMAGE.
+	@$(MAKE) --no-print-directory perf-vs ISOLATION=microvm
+
+.PHONY: microvm-setup
+microvm-setup: ## One-time: install krunvm (the libkrun microVM runner).
+	$(call say,microvm-setup)
+	@if [ "$$(uname)" = "Darwin" ]; then \
+	    command -v brew >/dev/null 2>&1 || { echo "    ✗ Homebrew required — see https://brew.sh"; exit 1; }; \
+	    brew tap slp/krun && brew install krunvm && echo "    ✓ krunvm installed — run: make microvm-doctor"; \
+	 else \
+	    echo "    Linux: install krunvm from your distro (Fedora: dnf install krunvm) or"; \
+	    echo "    build libkrun + krunvm from https://github.com/containers/krunvm"; \
+	 fi
+
+.PHONY: microvm-doctor
+microvm-doctor: ## Check the microVM backend (krunvm present, host arch, version).
+	$(call say,microvm-doctor)
+	@echo "    host  : $$(uname -m) $$(uname -s)"
+	@if command -v krunvm >/dev/null 2>&1; then \
+	    echo "    krunvm: $$(krunvm --version 2>/dev/null | head -1)"; \
+	    echo "    ✓ ready — run: make perf-vs-vm   (or: aatxe perf-vs --isolation microvm …)"; \
+	 else \
+	    echo "    ✗ krunvm not found — run: make microvm-setup"; exit 1; \
+	 fi
 
 # ----------------------------------------------------------------------------
 # Local realtime dashboard

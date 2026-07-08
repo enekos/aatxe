@@ -175,6 +175,40 @@ aatxe run --lang go   --out /tmp/head.json
 aatxe run --lang rust --out /tmp/head.json
 ```
 
+#### Predictable numbers: run in a microVM
+
+Host noise — background load, another core waking, thermal throttling — is the
+enemy of a stable bench number. Pass `--isolation microvm` to run the bench
+inside an ephemeral [libkrun](https://github.com/containers/krunvm) microVM
+instead of on the host: pinned vCPUs, a fixed RAM budget, and a clean rootfs,
+so the same code benches the same way twice. One code path on macOS
+(Hypervisor.framework) and Linux (KVM).
+
+```bash
+make microvm-setup     # one-time: install krunvm (Homebrew on macOS)
+make microvm-doctor    # check it's ready
+
+# both bench entry points take the same knobs:
+aatxe run     --lang rust --isolation microvm
+aatxe perf-vs --against origin/master --isolation microvm
+make perf-vs-vm        # shorthand for: make perf-vs ISOLATION=microvm
+```
+
+Only the knobs that actually move the numbers are surfaced; everything else
+uses libkrun defaults:
+
+| flag (or env) | default | meaning |
+|---|---|---|
+| `--isolation` | `local` | `local` (host) or `microvm` |
+| `--vm-cpus` (`AATXE_VM_CPUS`) | `2` | guest vCPUs |
+| `--vm-mem` (`AATXE_VM_MEM`) | `2048` | guest RAM (MiB) |
+| `--vm-image` (`AATXE_VM_IMAGE`) | `rust:1` / `golang:1` / `node:22` | guest image (must ship the toolchain) |
+
+The working directory is mounted into the guest at the same path, and the
+`cargo` / `go` / `npm` caches persist under `~/.cache/aatxe/vm`, so only the
+first run pays the image-pull + cold-build cost. `perf-vs` runs *both* sides
+of the A/B in matching guests, keeping the comparison fair.
+
 ### 2½. Trial the gate locally — no CI wiring needed
 
 `aatxe baseline save` snapshots a report under `.aatxe/baselines/`
