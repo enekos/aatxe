@@ -14,6 +14,7 @@
 //! so downstream consumers see identical statistics regardless of language.
 
 use crate::ast::ast_import_extractor::AstImportExtractor;
+use crate::sandbox::Isolation;
 use aatxe_core::affected::{resolve_affected, AffectedOptions};
 use aatxe_core::types::{AffectedScope as CoreScope, Language, RunReport};
 use anyhow::{Context, Result};
@@ -37,6 +38,8 @@ pub struct RunSpec {
     /// When `Some`, restrict the run to exactly these bench files (no discovery).
     pub bench_files: Option<Vec<PathBuf>>,
     pub verbose: bool,
+    /// Where the runner executes — host or microVM.
+    pub isolation: Isolation,
 }
 
 pub fn execute(lang: Language, spec: &RunSpec) -> Result<RunReport> {
