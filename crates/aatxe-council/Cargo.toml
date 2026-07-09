@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 description = "Pure orchestration for the aatxe agent council: a single-layer mixture-of-agents PR reviewer with a dedicated judge"
 
+[lints]
+workspace = true
 [dependencies]
 aatxe-core = { path = "../aatxe-core" }
 serde = { workspace = true }

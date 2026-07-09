@@ -33,6 +33,8 @@ examples/**/*.tsbuildinfo
 # Local dev artefacts (calibration sweeps, smoke runs, logs)
 tmp/calibrate/
 tmp/smoke/
+tmp/m2/
+tmp/perf-vs/
 tmp/*.log
 tmp/aatxe-go-runner
 

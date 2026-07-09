@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[lints]
+workspace = true
 [[bin]]
 name = "aatxe-rust-runner"
 path = "src/main.rs"

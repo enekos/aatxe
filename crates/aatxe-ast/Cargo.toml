@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 description = "AST-based scope inspection (tree-sitter for TS/Go/Rust) so the aatxe council reasons about symbol-level scope, not flat text. Pure: no IO."
 
+[lints]
+workspace = true
 [lib]
 path = "src/lib.rs"
 

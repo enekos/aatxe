@@ -642,6 +642,11 @@ install: build-rust ## Install the aatxe binary to ~/.cargo/bin
 	$(call say,install)
 	$(CARGO) install --path crates/aatxe --locked
 
+.PHONY: install-hooks
+install-hooks: ## Install the Git pre-commit hook (cargo fmt/clippy + TS tsc)
+	$(call say,install-hooks)
+	install -m 755 scripts/pre-commit.sh .git/hooks/pre-commit
+
 .PHONY: clean
 clean: ## Remove cargo target/, sdk/ts/dist, sdk/ts/node_modules, examples node_modules, tmp/
 	$(call say,clean)
