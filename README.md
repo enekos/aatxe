@@ -31,10 +31,7 @@ is **0.857 critical-F1 at 2.4 false positives per case** on a 24-case labeled co
 > **aatxe** [/ˈaːtʃe/] — the red-bull spirit of Basque mythology that emerges from
 > caves at night to identify and punish wrongdoers. Fitting, for a regression detector.
 
-## Why this rebuild
-
-Aatxe is a clean-slate Rust rebuild of an older Node-only perf-diff tool,
-with three sharper goals:
+## Why
 
 * **Polyglot at the boundary.** Aatxe defines a single JSON `RunReport`
   schema; per-language SDKs (`@aatxe/bench` for TS, `aatxe-bench` for Rust,
