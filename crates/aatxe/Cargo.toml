@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 description = "Statistical microbenchmark + regression-gate CLI for TypeScript, Go, and Rust"
 
+[lints]
+workspace = true
 [[bin]]
 name = "aatxe"
 path = "src/main.rs"

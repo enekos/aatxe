@@ -12,6 +12,8 @@ readme = "README.md"
 keywords = ["benchmark", "microbenchmark", "performance", "regression", "ci"]
 categories = ["development-tools::profiling", "development-tools::testing"]
 
+[lints]
+workspace = true
 [lib]
 path = "src/lib.rs"
 

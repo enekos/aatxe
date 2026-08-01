@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 description = "Self-healing learning corpus for the aatxe council — distills the best human feedback on prior PRs into project-specific guidance the council reads from a GitHub Actions artifact"
 
+[lints]
+workspace = true
 [dependencies]
 aatxe-council = { path = "../aatxe-council" }
 serde = { workspace = true }
