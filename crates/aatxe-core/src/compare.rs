@@ -97,8 +97,9 @@ pub fn compare_reports(
 
     let mut diffs: Vec<BenchDiff> = Vec::with_capacity(all_names.len());
     for name in all_names {
-        let b = base_by_name.get(name).cloned();
-        let h = head_by_name.get(name).cloned();
+        // Move each normalized run out instead of cloning it a second time.
+        let b = base_by_name.remove(name);
+        let h = head_by_name.remove(name);
         diffs.push(diff_one(
             name.to_string(),
             b,
