@@ -231,7 +231,7 @@ mod tests {
     use super::*;
     use crate::bench::BenchSpec;
     use crate::runner::AgentBackend;
-    use crate::state::{AppState, CouncilMode, UiConfig};
+    use crate::state::{AppState, UiConfig};
     use axum::body::Body;
     use axum::http::Request;
     use http_body_util::BodyExt;
@@ -257,14 +257,11 @@ mod tests {
                     edits: 1,
                     sleep_ms: 1,
                 },
-                council: CouncilMode::Off,
                 threshold: 0.05,
                 alpha: 0.05,
                 noisy_cv: 0.25,
-                confidence_floor: 0.55,
                 open_browser: false,
                 max_agents: 4,
-                aatxe_bin: "aatxe".into(),
             },
             bus,
             base_sha: "0000000000000000000000000000000000000000".into(),

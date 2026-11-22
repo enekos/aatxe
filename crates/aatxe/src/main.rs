@@ -9,9 +9,7 @@ mod adapter;
 mod ast;
 mod cli;
 mod commands;
-mod curator;
 mod github;
-mod llm;
 mod sandbox;
 
 use std::process::ExitCode;

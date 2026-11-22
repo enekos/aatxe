@@ -78,20 +78,6 @@ pub enum UiEvent {
         iteration: u32,
         error: String,
     },
-    CouncilStarted {
-        agent_id: String,
-    },
-    CouncilVerdict {
-        agent_id: String,
-        critical: u32,
-        major: u32,
-        shippable: u32,
-        markdown: String,
-    },
-    CouncilFailed {
-        agent_id: String,
-        error: String,
-    },
     AgentExited {
         agent_id: String,
         exit_code: Option<i32>,
@@ -137,8 +123,6 @@ pub struct Standing {
     pub score: f64,
     pub regressions: u32,
     pub improvements: u32,
-    /// `None` until the agent's council lane has reported.
-    pub council_critical: Option<u32>,
     /// Sum of per-bench median deltas (fraction). Negative = net faster.
     pub median_delta_sum: f64,
 }

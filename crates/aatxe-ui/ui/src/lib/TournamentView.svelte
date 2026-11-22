@@ -30,7 +30,7 @@
         <tr>
           <th></th><th>agent</th><th class="num">score</th>
           <th class="num">imp</th><th class="num">reg</th>
-          <th class="num">crit</th><th class="num">net Δ</th>
+          <th class="num">net Δ</th>
         </tr>
       </thead>
       <tbody>
@@ -41,7 +41,6 @@
             <td class="num">{s.score.toFixed(1)}</td>
             <td class="num">{s.improvements}</td>
             <td class="num">{s.regressions}</td>
-            <td class="num">{s.councilCritical ?? "…"}</td>
             <td class="num">{(s.medianDeltaSum * 100).toFixed(1)}%</td>
           </tr>
         {/each}

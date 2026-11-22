@@ -6,9 +6,8 @@
 //! task plus four function declarations, executes whatever tool calls
 //! come back (confined to the agent's worktree), feeds the results back,
 //! and repeats until the model answers in plain text or the turn budget
-//! runs out. Same wire shape as the council's `gemini_http.rs` backend
-//! (`/v1beta/openai/chat/completions`, `GEMINI_API_KEY` bearer auth) so
-//! one key drives both.
+//! runs out. Uses the `/v1beta/openai/chat/completions` endpoint with
+//! `GEMINI_API_KEY` bearer auth.
 //!
 //! Everything here is blocking (`ureq` + `std::process`), mirroring the
 //! rest of aatxe; `runner::run_agent` wraps it in `spawn_blocking`.
@@ -375,8 +374,7 @@ pub fn run_gemini_agent(
     Ok(())
 }
 
-/// POST with two retries on transport errors / 408 / 425 / 429 / 5xx —
-/// same retriable set as the council's Gemini backend.
+/// POST with two retries on transport errors / 408 / 425 / 429 / 5xx.
 fn post_with_retry(
     agent: &ureq::Agent,
     cfg: &GeminiAgentConfig,

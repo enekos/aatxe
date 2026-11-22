@@ -11,15 +11,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CouncilMode {
-    Off,
-    /// `AATXE_COUNCIL_STUB=1` — proves plumbing, free and offline.
-    Stub,
-    /// `--backend claude-code` — real review via the local `claude` CLI.
-    Real,
-}
-
 pub struct UiConfig {
     pub repo_root: PathBuf,
     pub port: u16,
@@ -30,16 +21,11 @@ pub struct UiConfig {
     pub session_dir: PathBuf,
     pub poll_secs: u64,
     pub backend: AgentBackend,
-    pub council: CouncilMode,
     pub threshold: f64,
     pub alpha: f64,
     pub noisy_cv: f64,
-    pub confidence_floor: f64,
     pub open_browser: bool,
     pub max_agents: usize,
-    /// The `aatxe` binary used for council runs. Defaults to
-    /// `current_exe()` so the dashboard drives the same build it ships in.
-    pub aatxe_bin: PathBuf,
 }
 
 impl UiConfig {
@@ -67,7 +53,6 @@ pub struct AgentRecord {
     pub done: bool,
     #[serde(skip)]
     pub latest_compare: Option<CompareReport>,
-    pub council_critical: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -24,7 +24,7 @@ function ensureAgent(store, id) {
     store.agents.set(id, {
       id, name: id, task: "", branch: "", worktree: "",
       tournamentId: null, outputs: [], compares: [], failures: [],
-      council: null, councilState: null, exit: null, failed: null,
+      exit: null, failed: null,
       benching: false,
     });
     store.agentOrder.push(id);
@@ -81,21 +81,6 @@ function reduce(store, ev) {
       const a = ensureAgent(store, ev.agentId);
       a.benching = false;
       a.failures.push({ iteration: ev.iteration, error: ev.error });
-      break;
-    }
-    case "councilStarted":
-      ensureAgent(store, ev.agentId).councilState = "running";
-      break;
-    case "councilVerdict": {
-      const a = ensureAgent(store, ev.agentId);
-      a.councilState = "done";
-      a.council = ev;
-      break;
-    }
-    case "councilFailed": {
-      const a = ensureAgent(store, ev.agentId);
-      a.councilState = "failed";
-      a.council = { error: ev.error };
       break;
     }
     case "agentExited":

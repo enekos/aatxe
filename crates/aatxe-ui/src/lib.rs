@@ -10,9 +10,8 @@
 //!    run in isolated git worktrees; every time an agent's working tree
 //!    changes, its benches re-run and the head-vs-base comparison streams
 //!    to the browser as a trajectory.
-//! 3. **Judge** — finished agents get an `aatxe council` review of their
-//!    branch diff; tournaments rank K agents on the same task by perf
-//!    verdicts + council criticals.
+//! 3. **Judge** — tournaments rank K agents on the same task by their perf
+//!    verdicts.
 //!
 //! Everything is an event ([`events::UiEvent`]) appended to the session's
 //! `events.jsonl` and broadcast over SSE — the frontend is a reducer, and
@@ -21,7 +20,6 @@
 pub mod agents;
 pub mod bench;
 pub mod bus;
-pub mod council;
 pub mod events;
 pub mod gemini;
 pub mod runner;
@@ -33,7 +31,7 @@ pub mod watch;
 pub use bench::BenchSpec;
 pub use gemini::GeminiAgentConfig;
 pub use runner::{default_allowed_tools, AgentBackend};
-pub use state::{CouncilMode, UiConfig};
+pub use state::UiConfig;
 
 use crate::bus::EventBus;
 use crate::events::UiEvent;

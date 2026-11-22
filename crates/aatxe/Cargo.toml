@@ -21,9 +21,7 @@ ui = ["dep:aatxe-ui"]
 aatxe-core = { path = "../aatxe-core" }
 aatxe-ui = { path = "../aatxe-ui", optional = true }
 aatxe-ast = { path = "../aatxe-ast" }
-aatxe-council = { path = "../aatxe-council" }
 aatxe-evals = { path = "../aatxe-evals" }
-aatxe-learn = { path = "../aatxe-learn" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
@@ -31,7 +29,6 @@ thiserror = { workspace = true }
 clap = { workspace = true }
 ureq = { workspace = true }
 regex = { workspace = true }
-walkdir = { workspace = true }
 time = { workspace = true }
 
 [dev-dependencies]

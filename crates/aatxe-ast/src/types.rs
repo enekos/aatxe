@@ -4,8 +4,7 @@
 //! a flat `Vec` of [`LogicEdge`] + a `Vec<String>` of import targets,
 //! plus optional per-symbol natural-language descriptions. Symbol IDs
 //! are stable strings (`fn:name`, `mtd:Class.name`, `cls:Name`,
-//! `type:Name`) so edges can refer to them by string and the council
-//! prompt can quote them verbatim.
+//! `type:Name`) so edges can refer to them by string.
 
 use std::collections::HashMap;
 
@@ -65,10 +64,8 @@ pub struct LogicSymbol {
     pub doc: String,
 }
 
-/// Edge between two [`LogicSymbol`]s. The intra-file call graph; the
-/// council prompt uses these to flag "this changed function is called
-/// from N other functions in the same file" without rolling up to
-/// project-wide reachability.
+/// Edge between two [`LogicSymbol`]s: the intra-file call graph, without
+/// rolling up to project-wide reachability.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LogicEdge {
     pub from: String,
@@ -80,8 +77,7 @@ pub struct LogicEdge {
 
 /// Result of parsing one source file.
 ///
-/// `file_summary` is the one-liner the council prompt prints under the
-/// file header. `raw_content` is the optional escape hatch when the
+/// `file_summary` is a one-line description of the file. `raw_content` is the optional escape hatch when the
 /// describer wants the raw source treated as the "content" (used by the
 /// markdown describer in mairu — kept here for parity but unused by the
 /// three coding-language describers today).

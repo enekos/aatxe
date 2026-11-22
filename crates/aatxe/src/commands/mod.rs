@@ -7,9 +7,7 @@ pub mod affected;
 pub mod baseline;
 pub mod comment;
 pub mod compare;
-pub mod council;
 pub mod evals;
-pub mod learn;
 pub mod list;
 pub mod perf_vs;
 pub mod report;
@@ -20,9 +18,7 @@ pub mod ui;
 use crate::cli::{Cli, Command};
 
 /// Process-level outcome. Subcommands that don't have a regression-gate
-/// concept always return [`Outcome::Ok`]. The council shares the
-/// "fail-on-X" semantics: critical findings map to [`Outcome::Regressions`]
-/// so the same CI exit-code contract works for both gates.
+/// concept always return [`Outcome::Ok`].
 pub enum Outcome {
     Ok,
     Regressions,
@@ -36,9 +32,7 @@ pub fn run(cli: Cli) -> Result<Outcome> {
         Command::Comment(a) => comment::execute(a).map(|_| Outcome::Ok),
         Command::Affected(a) => affected::execute(a).map(|_| Outcome::Ok),
         Command::List(a) => list::execute(a).map(|_| Outcome::Ok),
-        Command::Council(a) => council::execute(a),
         Command::Evals(a) => evals::execute(a),
-        Command::Learn(a) => learn::execute(a),
         Command::PerfVs(a) => perf_vs::execute(a),
         Command::Baseline(a) => baseline::execute(a),
         #[cfg(feature = "ui")]

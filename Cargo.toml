@@ -4,14 +4,10 @@ members = [
     "crates/aatxe-core",
     "crates/aatxe",
     "crates/aatxe-ast",
-    "crates/aatxe-council",
     "crates/aatxe-evals",
-    "crates/aatxe-learn",
     "crates/aatxe-ui",
     "sdk/rust",
     "examples/rust-example",
-    "examples/council-bench",
-    "examples/big-diff-bench",
     "examples/core-bench",
     "examples/ast-bench",
 ]
@@ -32,7 +28,6 @@ thiserror = "1.0"
 clap = { version = "4.5", features = ["derive", "env"] }
 ureq = { version = "2.10", features = ["json"] }
 regex = "1.10"
-walkdir = "2.5"
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "serde"] }
 
 [profile.release]

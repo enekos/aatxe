@@ -131,7 +131,7 @@ mod tests {
     fn first_scan_reports_then_dedups_until_mtime_changes() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
-        let pv = repo.join("tmp/perf-vs/abc-council");
+        let pv = repo.join("tmp/perf-vs/abc-core");
         std::fs::create_dir_all(&pv).unwrap();
         std::fs::write(pv.join("cmp.json"), "{}").unwrap();
 

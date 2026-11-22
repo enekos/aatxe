@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "AST-based scope inspection (tree-sitter for TS/Go/Rust) so the aatxe council reasons about symbol-level scope, not flat text. Pure: no IO."
+description = "Tree-sitter import and symbol extraction for TS/Go/Rust, feeding the aatxe affected-set resolver. Pure: no IO."
 
 [lib]
 path = "src/lib.rs"

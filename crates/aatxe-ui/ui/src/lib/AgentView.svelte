@@ -8,7 +8,7 @@
   let { agentId } = $props();
 
   // Always read the agent fresh out of the published view, so in-place
-  // reducer mutations (new outputs, compares, council verdict) surface. The
+  // reducer mutations (new outputs, compares) surface. The
   // spread makes a new top-level reference every publish so the template and
   // the deriveds below recompute (nested arrays stay shared, read live).
   const agent = $derived({ ...$view.agents.get(agentId) });
@@ -106,24 +106,6 @@
   <div class="card">
     <h3>latest compare <span class="right"><SummaryChips summary={last.report.summary} /></span></h3>
     <CompareTable report={last.report} />
-  </div>
-{/if}
-
-{#if agent.councilState}
-  <div class="card">
-    <h3>council</h3>
-    {#if agent.councilState === "running"}
-      <div class="notices">council reviewing…</div>
-    {:else if agent.councilState === "failed"}
-      <div class="iter-failed">council failed: {agent.council.error}</div>
-    {:else}
-      <div class="council-chips">
-        <span class="badge crit">{agent.council.critical} critical</span>
-        <span class="badge removed">{agent.council.major} major</span>
-        <span class="badge neutral">{agent.council.shippable} shippable</span>
-      </div>
-      <pre class="council">{agent.council.markdown || "(empty)"}</pre>
-    {/if}
   </div>
 {/if}
 

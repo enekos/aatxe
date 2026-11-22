@@ -2,9 +2,9 @@
 //!
 //! Business logic lives in the `aatxe-ui` crate; this module only
 //! resolves defaults that need the CLI's context (repo root discovery,
-//! bench-arg → bench-spec mapping, session id, current exe).
+//! bench-arg → bench-spec mapping, session id).
 
-use crate::cli::{PerfBenchArg, UiAgentArg, UiArgs, UiCouncilArg};
+use crate::cli::{PerfBenchArg, UiAgentArg, UiArgs};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,12 +59,6 @@ pub fn execute(args: UiArgs) -> Result<()> {
         }
     };
 
-    let council = match args.council {
-        UiCouncilArg::Off => aatxe_ui::CouncilMode::Off,
-        UiCouncilArg::Stub => aatxe_ui::CouncilMode::Stub,
-        UiCouncilArg::Real => aatxe_ui::CouncilMode::Real,
-    };
-
     let session_id = format!(
         "s{:x}",
         SystemTime::now()
@@ -90,29 +84,19 @@ pub fn execute(args: UiArgs) -> Result<()> {
         session_dir,
         poll_secs: args.poll_secs,
         backend,
-        council,
         threshold: args.threshold,
         alpha: args.alpha,
         noisy_cv: args.noisy_cv,
-        confidence_floor: args.confidence_floor,
         open_browser: !args.no_open,
         max_agents: args.max_agents,
-        aatxe_bin: std::env::current_exe().context("resolving current exe")?,
     })
 }
 
 fn bench_bins(b: PerfBenchArg) -> Vec<&'static str> {
     match b {
-        PerfBenchArg::Council => vec!["aatxe-council-bench"],
-        PerfBenchArg::BigDiff => vec!["aatxe-big-diff-bench"],
         PerfBenchArg::Core => vec!["aatxe-core-bench"],
         PerfBenchArg::Ast => vec!["aatxe-ast-bench"],
-        PerfBenchArg::All => vec![
-            "aatxe-council-bench",
-            "aatxe-big-diff-bench",
-            "aatxe-core-bench",
-            "aatxe-ast-bench",
-        ],
+        PerfBenchArg::All => vec!["aatxe-core-bench", "aatxe-ast-bench"],
     }
 }
 
@@ -140,18 +124,10 @@ mod tests {
 
     #[test]
     fn bench_bins_cover_all_variants() {
-        assert_eq!(
-            bench_bins(PerfBenchArg::Council),
-            vec!["aatxe-council-bench"]
-        );
-        assert_eq!(
-            bench_bins(PerfBenchArg::BigDiff),
-            vec!["aatxe-big-diff-bench"]
-        );
         assert_eq!(bench_bins(PerfBenchArg::Core), vec!["aatxe-core-bench"]);
         assert_eq!(bench_bins(PerfBenchArg::Ast), vec!["aatxe-ast-bench"]);
         // `All` must stay in lockstep with every concrete variant.
-        assert_eq!(bench_bins(PerfBenchArg::All).len(), 4);
+        assert_eq!(bench_bins(PerfBenchArg::All).len(), 2);
     }
 
     #[test]

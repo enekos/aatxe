@@ -266,20 +266,13 @@ fn ensure_worktree(repo: &Path, wt_path: &Path, sha: &str, verbose: bool) -> Res
 
 fn expand_bench(b: PerfBenchArg) -> Vec<PerfBenchArg> {
     match b {
-        PerfBenchArg::All => vec![
-            PerfBenchArg::Council,
-            PerfBenchArg::BigDiff,
-            PerfBenchArg::Core,
-            PerfBenchArg::Ast,
-        ],
+        PerfBenchArg::All => vec![PerfBenchArg::Core, PerfBenchArg::Ast],
         single => vec![single],
     }
 }
 
 fn bench_slug(b: PerfBenchArg) -> &'static str {
     match b {
-        PerfBenchArg::Council => "council",
-        PerfBenchArg::BigDiff => "big-diff",
         PerfBenchArg::Core => "core",
         PerfBenchArg::Ast => "ast",
         PerfBenchArg::All => "all",
@@ -288,8 +281,6 @@ fn bench_slug(b: PerfBenchArg) -> &'static str {
 
 fn bench_binary(b: PerfBenchArg) -> &'static str {
     match b {
-        PerfBenchArg::Council => "aatxe-council-bench",
-        PerfBenchArg::BigDiff => "aatxe-big-diff-bench",
         PerfBenchArg::Core => "aatxe-core-bench",
         PerfBenchArg::Ast => "aatxe-ast-bench",
         PerfBenchArg::All => unreachable!("expand_bench unrolls All before reaching here"),
@@ -336,10 +327,8 @@ fn build_and_run(
         build_and_run_host(cwd, bin, bench, side, build, verbose)?
     };
 
-    // Big-diff-bench interleaves `METRIC k=v` lines (for the autoresearch
-    // loop) with the trailing RunReport JSON; council-bench emits the JSON
-    // directly. Strip any leading non-JSON lines before parsing so both
-    // protocols round-trip through the same code path.
+    // A bench may print status lines before the trailing RunReport JSON;
+    // strip any leading non-JSON lines before parsing.
     let json_slice = strip_non_json_prefix(&stdout_str);
     let mut report: RunReport = serde_json::from_str(json_slice).with_context(|| {
         format!(
@@ -461,8 +450,6 @@ fn build_and_run_microvm(
 
 fn service_for(bench: PerfBenchArg) -> &'static str {
     match bench {
-        PerfBenchArg::Council => "aatxe-council",
-        PerfBenchArg::BigDiff => "aatxe-big-diff",
         PerfBenchArg::Core => "aatxe-core",
         PerfBenchArg::Ast => "aatxe-ast",
         PerfBenchArg::All => unreachable!(),
@@ -514,8 +501,6 @@ mod tests {
 
     #[test]
     fn bench_slug_round_trip() {
-        assert_eq!(bench_slug(PerfBenchArg::Council), "council");
-        assert_eq!(bench_slug(PerfBenchArg::BigDiff), "big-diff");
         assert_eq!(bench_slug(PerfBenchArg::Core), "core");
         assert_eq!(bench_slug(PerfBenchArg::Ast), "ast");
         assert_eq!(bench_slug(PerfBenchArg::All), "all");
@@ -533,19 +518,14 @@ mod tests {
     #[test]
     fn expand_all_into_concrete_benches() {
         let v = expand_bench(PerfBenchArg::All);
-        assert_eq!(v.len(), 4);
-        assert!(v.contains(&PerfBenchArg::Council));
-        assert!(v.contains(&PerfBenchArg::BigDiff));
+        assert_eq!(v.len(), 2);
         assert!(v.contains(&PerfBenchArg::Core));
         assert!(v.contains(&PerfBenchArg::Ast));
     }
 
     #[test]
     fn expand_single_passes_through() {
-        assert_eq!(
-            expand_bench(PerfBenchArg::Council),
-            vec![PerfBenchArg::Council]
-        );
+        assert_eq!(expand_bench(PerfBenchArg::Core), vec![PerfBenchArg::Core]);
     }
 
     #[test]

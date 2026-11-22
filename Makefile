@@ -108,7 +108,7 @@ $(TMP):
 	@mkdir -p $(TMP)
 
 .PHONY: e2e
-e2e: e2e-rust e2e-go e2e-ts e2e-regression-gate council-bench-self core-bench-self ast-bench-self evals ## Run the full aatxe pipeline against every adapter + a fake regression + self-bench compares (council/core/ast) + the stub-LLM eval harness
+e2e: e2e-rust e2e-go e2e-ts e2e-regression-gate core-bench-self ast-bench-self evals ## Run the full aatxe pipeline against every adapter + a fake regression + self-bench compares (core/ast) + the stats eval harness
 
 .PHONY: e2e-rust
 e2e-rust: $(TMP) build-rust ## Rust example: run → compare against itself → markdown
@@ -159,36 +159,13 @@ e2e-regression-gate: $(TMP) build-rust ## Synthesise a 30%-slower head and confi
 	@scripts/e2e-regression-gate.sh $(AATXE_BIN) $(TMP)
 
 # ----------------------------------------------------------------------------
-# Agent council (LLM-backed, Kimi)
-# ----------------------------------------------------------------------------
-
-COUNCIL_BENCH_BIN := $(REPO_ROOT)/target/release/aatxe-council-bench
-
-.PHONY: council-bench
-council-bench: $(TMP) build-rust ## Run the council pure-logic benches and dump the RunReport
-	$(call say,council-bench)
-	$(CARGO) build --release --bin aatxe-council-bench
-	AATXE_SERVICE=aatxe-council $(COUNCIL_BENCH_BIN) > $(TMP)/council.json
-	@head -c 600 $(TMP)/council.json && echo "" && echo "    ✓ council-bench: wrote $(TMP)/council.json"
-
-.PHONY: council-bench-self
-council-bench-self: council-bench ## Compare the council bench against itself — proves the regression gate works on council code
-	$(call say,council-bench-self)
-	$(AATXE_BIN) compare --base $(TMP)/council.json --head $(TMP)/council.json \
-	    --out $(TMP)/council.cmp.json --markdown $(TMP)/council.md
-	@grep -q '<!-- aatxe:report -->' $(TMP)/council.md \
-	    && echo "    ✓ council-bench-self: sticky marker present" \
-	    || (echo "    ✗ council-bench-self: sticky marker missing"; exit 1)
-
-# ----------------------------------------------------------------------------
 # Self-benches — aatxe benching its own hot code (very meta)
 # ----------------------------------------------------------------------------
 #
 # `core-bench` covers the statistical brain (`aatxe-core`): summarize_samples,
 # Mann-Whitney U, MAD, Welch-t, compare_reports, and the affected-set import
 # extractor — the no-network code that runs on every gate. `ast-bench` covers
-# `aatxe-ast` tree-sitter parsing — the heaviest per-call CPU on the council's
-# pre-LLM path. Both feed the self-bench CI workflow (`aatxe-self-bench.yml`).
+# `aatxe-ast` tree-sitter parsing — the import extraction behind `--affected`. Both feed the self-bench CI workflow (`aatxe-self-bench.yml`).
 
 CORE_BENCH_BIN := $(REPO_ROOT)/target/release/aatxe-core-bench
 AST_BENCH_BIN  := $(REPO_ROOT)/target/release/aatxe-ast-bench
@@ -237,8 +214,7 @@ ast-bench-self: ast-bench ## Compare the ast bench against itself — proves the
 #
 # Knobs (all optional):
 #   REF       — ref to compare HEAD against. Default `origin/master`.
-#   BENCH     — `council` (default, ~5s) / `big-diff` (~30s) / `core` /
-#               `ast` / `all`.
+#   BENCH     — `core` (default, ~5s) / `ast` / `all`.
 #   VERBOSE   — set to anything to stream cargo + bench output.
 #
 # microVM knobs (predictable numbers via a libkrun guest — see microvm-setup):
@@ -247,7 +223,7 @@ ast-bench-self: ast-bench ## Compare the ast bench against itself — proves the
 #   VM_IMAGE  — override the guest OCI image (default is per-language).
 
 REF       ?= origin/master
-BENCH     ?= council
+BENCH     ?= core
 ISOLATION ?=
 VM_CPUS   ?=
 VM_MEM    ?=
@@ -268,7 +244,7 @@ perf-vs: $(TMP) build-rust ## Local A/B perf-compare HEAD vs $(REF) via a siblin
 perf-vs-self: $(TMP) build-rust ## Smoke test: perf-vs against HEAD~1 (or origin/master if no prior commit). Exercises the worktree + compare path end-to-end.
 	$(call say,perf-vs-self)
 	@ref=$$(git rev-parse --verify --quiet HEAD~1 || git rev-parse --verify origin/master); \
-	   $(AATXE_BIN) perf-vs --against $$ref --bench council \
+	   $(AATXE_BIN) perf-vs --against $$ref --bench core \
 	       --out-dir $(TMP)/perf-vs/self
 	@echo "    ✓ perf-vs-self: see $(TMP)/perf-vs/self/cmp.md"
 
@@ -313,7 +289,7 @@ microvm-doctor: ## Check the microVM backend (krunvm present, host arch, version
 #
 # `aatxe ui` serves the embedded dashboard: spawn coding agents in
 # isolated worktrees, re-bench on every working-tree change, stream
-# trajectories + council verdicts + tournament standings to the browser.
+# trajectories + tournament standings to the browser.
 #
 # Knobs (all optional):
 #   UI_PORT     — port to bind. Default 4866.
@@ -321,7 +297,7 @@ microvm-doctor: ## Check the microVM backend (krunvm present, host arch, version
 #   GEMINI_ENV  — env file sourced before launch (provides GEMINI_API_KEY).
 #                 Defaults to the first of: ./.env, the jobs-ai-prompt-lab
 #                 checkout next to this repo's parent.
-#   UI_FLAGS    — extra flags, e.g. `--council real --no-open`.
+#   UI_FLAGS    — extra flags, e.g. `--no-open`.
 
 UI_PORT    ?= 4866
 UI_BACKEND ?= gemini
@@ -334,257 +310,36 @@ ui: build-rust ## Launch the dashboard on $(UI_PORT) with the $(UI_BACKEND) agen
 	exec $(AATXE_BIN) ui --port $(UI_PORT) --agent-backend $(UI_BACKEND) $(UI_FLAGS)
 
 .PHONY: ui-demo
-ui-demo: build-rust ## Dashboard demo: offline stub agent + stub council, no LLM spend. Spawn an agent from the browser to watch the full loop.
+ui-demo: build-rust ## Dashboard demo: offline stub agent, no LLM spend. Spawn an agent from the browser to watch the full loop.
 	$(call say,ui-demo)
-	$(AATXE_BIN) ui --port $(UI_PORT) --agent-backend stub --council stub
-
-.PHONY: council-dry-run
-council-dry-run: $(TMP) build-rust ## Pipe the bundled council fixture diff through `aatxe council`. Requires KIMI_API_KEY.
-	$(call say,council-dry-run)
-	@if [ -z "$$KIMI_API_KEY" ]; then \
-	    echo "    ✗ KIMI_API_KEY is unset. Export it (or source from mairu .env) and rerun."; \
-	    exit 1; \
-	fi
-	$(AATXE_BIN) council --diff-file examples/council-bench/fixtures/sample.diff \
-	    --out $(TMP)/council-dry.json \
-	    --markdown $(TMP)/council-dry.md
-	@head -c 400 $(TMP)/council-dry.md && echo "" \
-	    && echo "    ✓ council-dry-run: wrote $(TMP)/council-dry.{json,md}"
-
-# ----------------------------------------------------------------------------
-# Pre-PR self-review
-# ----------------------------------------------------------------------------
-#
-# Run the council against the local working tree's diff against
-# `origin/master` (or `$BASE_REF`). Useful as the last step before
-# `gh pr create`. Two flavours:
-#
-#   • `make council-self`       — uses the user's configured backend
-#                                  (pi-proxy by default). Real LLM calls.
-#   • `make council-self-stub`  — same flow, but `AATXE_COUNCIL_STUB=1`
-#                                  so it's fast/free. Smoke-tests the
-#                                  diff-from-worktree plumbing without
-#                                  burning model quota.
-#
-# Both write to `$(TMP)/council-self.{json,md}` and print the rendered
-# markdown to stdout.
-
-BASE_REF ?= origin/master
-
-.PHONY: council-self
-council-self: $(TMP) build-rust ## Run the council against the local diff (HEAD vs origin/master). Set BASE_REF to override.
-	$(call say,council-self)
-	@if ! git rev-parse --verify --quiet $(BASE_REF) > /dev/null; then \
-	    echo "    ✗ base ref $(BASE_REF) not found locally — try \`git fetch origin master\` first."; \
-	    exit 1; \
-	fi
-	@git diff $(BASE_REF)...HEAD > $(TMP)/council-self.diff
-	@if [ ! -s $(TMP)/council-self.diff ]; then \
-	    echo "    ✗ empty diff vs $(BASE_REF); commit something first or check the base ref."; \
-	    exit 1; \
-	fi
-	$(AATXE_BIN) council --diff-file $(TMP)/council-self.diff \
-	    --out $(TMP)/council-self.json \
-	    --markdown $(TMP)/council-self.md
-	@head -c 600 $(TMP)/council-self.md && echo "" \
-	    && echo "    ✓ council-self: wrote $(TMP)/council-self.{diff,json,md}"
-
-.PHONY: council-self-stub
-council-self-stub: $(TMP) build-rust ## Same as council-self but with the deterministic stub (no Kimi/Claude calls).
-	$(call say,council-self-stub)
-	@if ! git rev-parse --verify --quiet $(BASE_REF) > /dev/null; then \
-	    echo "    ✗ base ref $(BASE_REF) not found locally — try \`git fetch origin master\` first."; \
-	    exit 1; \
-	fi
-	@git diff $(BASE_REF)...HEAD > $(TMP)/council-self.diff
-	@if [ ! -s $(TMP)/council-self.diff ]; then \
-	    echo "    ✗ empty diff vs $(BASE_REF); commit something first."; \
-	    exit 1; \
-	fi
-	AATXE_COUNCIL_STUB=1 $(AATXE_BIN) council --diff-file $(TMP)/council-self.diff \
-	    --out $(TMP)/council-self.json \
-	    --markdown $(TMP)/council-self.md
-	@head -c 400 $(TMP)/council-self.md && echo "" \
-	    && echo "    ✓ council-self-stub: wrote $(TMP)/council-self.{diff,json,md}"
-
-# ----------------------------------------------------------------------------
-# Confidence-floor calibration
-# ----------------------------------------------------------------------------
-#
-# Sweep the council's `--confidence-floor` setting against the labeled
-# eval corpus and report the FP/case + critical-recall side-by-side per
-# floor. Backed by `scripts/calibrate-confidence-floor.sh`.
-#
-# Headline goal: justify raising the floor 0.55 → 0.65 with data
-# (per projects/aatxe.md:203 action #2). Without scaffolding this is a
-# manual ~60-minute exercise; with it, one `make evals-calibrate` call.
-
-.PHONY: evals-calibrate
-evals-calibrate: $(TMP) build-rust ## Re-run the eval corpus at multiple --confidence-floor settings + diff metrics (stub LLM)
-	$(call say,evals-calibrate)
-	@scripts/calibrate-confidence-floor.sh "$(TMP)" "$(AATXE_BIN)"
-
-.PHONY: evals-calibrate-real
-evals-calibrate-real: $(TMP) build-rust ## Confidence-floor sweep against real Kimi. Requires KIMI_API_KEY. ~60min/floor.
-	$(call say,evals-calibrate-real)
-	@USE_REAL_KIMI=true scripts/calibrate-confidence-floor.sh "$(TMP)" "$(AATXE_BIN)"
-
-# ----------------------------------------------------------------------------
-# Learning corpus (`aatxe learn`)
-# ----------------------------------------------------------------------------
-#
-# Self-healing learning corpus persisted as a GitHub Actions artifact
-# between council runs. Three local-iteration targets:
-#
-#   • `make learn-seed`     — synthesise a fixture corpus + PR feedback,
-#                             run a harvest cycle against them, show the
-#                             resulting corpus. No network, no Kimi.
-#   • `make learn-show`     — pretty-print the current corpus on disk.
-#   • `make learn-compact`  — rescore + truncate + drop below-threshold
-#                             entries. Idempotent.
-#
-# All three write to `$(TMP)/aatxe-learning-corpus.json` so the e2e cycle
-# stays gitignored.
-
-LEARN_CORPUS := $(TMP)/aatxe-learning-corpus.json
-
-.PHONY: learn-seed
-learn-seed: $(TMP) build-rust ## Seed a corpus from a synthetic PR — proves harvest+compact end-to-end with no Kimi calls
-	$(call say,learn-seed)
-	@scripts/learn-seed-fixture.sh "$(AATXE_BIN)" "$(LEARN_CORPUS)"
-	@$(AATXE_BIN) learn show --corpus $(LEARN_CORPUS)
-	@echo "    ✓ learn-seed: corpus at $(LEARN_CORPUS)"
-
-.PHONY: learn-show
-learn-show: build-rust ## Print the current corpus on disk (defaults to $(LEARN_CORPUS))
-	$(AATXE_BIN) learn show --corpus $(LEARN_CORPUS)
-
-.PHONY: learn-compact
-learn-compact: build-rust ## Rescore + truncate the corpus
-	$(AATXE_BIN) learn compact --corpus $(LEARN_CORPUS)
+	$(AATXE_BIN) ui --port $(UI_PORT) --agent-backend stub
 
 # ----------------------------------------------------------------------------
 # Eval harness — `aatxe evals`
 # ----------------------------------------------------------------------------
 #
-# Two modes:
-#   • `make evals`         — stub LLM. Deterministic. Runs on every PR in CI.
-#                            Verifies plumbing + the stats engine numbers,
-#                            and gates against evals/council/baselines/stub.json.
-#   • `make evals-real`    — real Kimi. Manual. Requires KIMI_API_KEY.
-#                            Produces a quality measurement; can update the
-#                            real-LLM baseline.
-#
-# The output JSON is the artefact a downstream service can attach to a
-# PR comment via `aatxe comment --report …`.
+# Synthetic A/B benchmark pairs with known ground truth, scored against the
+# comparator. Deterministic; runs on every PR in CI and gates against the
+# committed evals/baseline.json.
 
 EVALS_JSON     := $(TMP)/aatxe-evals.json
 EVALS_MD       := $(TMP)/aatxe-evals.md
-EVALS_BASELINE := $(REPO_ROOT)/evals/council/baselines/stub.json
+EVALS_BASELINE := $(REPO_ROOT)/evals/baseline.json
 
 .PHONY: evals
-evals: $(TMP) build-rust ## Run the eval harness with the stub LLM and gate against the committed baseline
+evals: $(TMP) build-rust ## Run the stats eval harness and gate against the committed baseline
 	$(call say,evals)
-	AATXE_COUNCIL_STUB=1 $(AATXE_BIN) evals \
+	$(AATXE_BIN) evals \
 	    --out $(EVALS_JSON) \
 	    --markdown $(EVALS_MD) \
 	    --baseline $(EVALS_BASELINE)
 	@echo "    ✓ evals: wrote $(EVALS_JSON) and $(EVALS_MD)"
 
-.PHONY: evals-no-gate
-evals-no-gate: $(TMP) build-rust ## Run the eval harness (stub) without baseline gating — for iterating on the corpus
-	$(call say,evals-no-gate)
-	AATXE_COUNCIL_STUB=1 $(AATXE_BIN) evals \
-	    --out $(EVALS_JSON) \
-	    --markdown $(EVALS_MD)
-	@echo "    ✓ evals-no-gate: wrote $(EVALS_JSON) and $(EVALS_MD)"
-
-.PHONY: evals-real
-evals-real: $(TMP) build-rust ## Run the eval harness using the real Kimi backend. Requires KIMI_API_KEY.
-	$(call say,evals-real)
-	@if [ -z "$$KIMI_API_KEY" ]; then \
-	    echo "    ✗ KIMI_API_KEY is unset. Export it (or source from mairu .env) and rerun."; \
-	    exit 1; \
-	fi
-	$(AATXE_BIN) evals \
-	    --council-real-llm \
-	    --out $(TMP)/aatxe-evals-real.json \
-	    --markdown $(TMP)/aatxe-evals-real.md
-	@echo "    ✓ evals-real: wrote $(TMP)/aatxe-evals-real.{json,md}"
-
-.PHONY: evals-real-gemini
-evals-real-gemini: $(TMP) build-rust ## Run the eval harness using the real Gemini backend (direct HTTP, no gate). Requires GEMINI_API_KEY.
-	$(call say,evals-real-gemini)
-	@if [ -z "$$GEMINI_API_KEY" ]; then \
-	    echo "    ✗ GEMINI_API_KEY is unset. Export it and rerun (model via GEMINI_MODEL, default gemini-2.5-flash)."; \
-	    exit 1; \
-	fi
-	$(AATXE_BIN) evals \
-	    --council-real-llm \
-	    --backend gemini \
-	    --out $(TMP)/aatxe-evals-real-gemini.json \
-	    --markdown $(TMP)/aatxe-evals-real-gemini.md
-	@echo "    ✓ evals-real-gemini: wrote $(TMP)/aatxe-evals-real-gemini.{json,md}"
-
 .PHONY: evals-update-baseline
-evals-update-baseline: evals-no-gate ## Replace the committed stub baseline with the current run. Use only when corpus or pipeline changes are deliberate.
+evals-update-baseline: $(TMP) build-rust ## Replace the committed baseline with the current run. Use only when comparator changes are deliberate.
 	$(call say,evals-update-baseline)
-	cp $(EVALS_JSON) $(EVALS_BASELINE)
+	$(AATXE_BIN) evals --out $(EVALS_BASELINE) --markdown $(EVALS_MD)
 	@echo "    ✓ wrote $(EVALS_BASELINE) — commit it to update the gate"
-
-# ----------------------------------------------------------------------------
-# M2.5 — real-claude baseline gate
-# ----------------------------------------------------------------------------
-EVALS_REAL_CLAUDE_BASELINE := $(REPO_ROOT)/evals/council/baselines/real-claude.json
-
-.PHONY: evals-real-claude-gate
-evals-real-claude-gate: $(TMP) build-rust ## Run real-LLM eval (claude-code backend) + gate against the committed real-claude baseline. Looser tolerances auto-applied. Requires Claude Code subscription on the box.
-	$(call say,evals-real-claude-gate)
-	@if ! command -v claude >/dev/null 2>&1; then \
-	    echo "    ✗ \`claude\` binary not found on PATH — install Claude Code first."; \
-	    exit 1; \
-	fi
-	$(AATXE_BIN) evals \
-	    --council-real-llm \
-	    --backend claude-code \
-	    --out $(TMP)/aatxe-evals-real-claude.json \
-	    --markdown $(TMP)/aatxe-evals-real-claude.md \
-	    --baseline $(EVALS_REAL_CLAUDE_BASELINE)
-	@echo "    ✓ evals-real-claude-gate: wrote $(TMP)/aatxe-evals-real-claude.{json,md}"
-
-.PHONY: evals-update-real-claude-baseline
-evals-update-real-claude-baseline: $(TMP) build-rust ## Replace the committed real-claude baseline with a fresh real-LLM run. Use deliberately on intentional improvements.
-	$(call say,evals-update-real-claude-baseline)
-	@if ! command -v claude >/dev/null 2>&1; then \
-	    echo "    ✗ \`claude\` binary not found on PATH — install Claude Code first."; \
-	    exit 1; \
-	fi
-	$(AATXE_BIN) evals \
-	    --council-real-llm \
-	    --backend claude-code \
-	    --out $(EVALS_REAL_CLAUDE_BASELINE) \
-	    --markdown $(REPO_ROOT)/evals/council/baselines/real-claude.md \
-	    --no-fail
-	@echo "    ✓ wrote $(EVALS_REAL_CLAUDE_BASELINE) — commit it to update the gate"
-
-# ----------------------------------------------------------------------------
-# M2.4 — offline confidence-floor recalibration
-# ----------------------------------------------------------------------------
-.PHONY: evals-recalibrate-floor
-evals-recalibrate-floor: $(TMP) build-rust ## Sweep candidate confidence-floor values offline against a captured eval JSON. Set FROM=<path> (default tmp/aatxe-evals.json) and FLOORS=<csv> (default 0.50,0.55,0.60,0.65,0.70).
-	$(call say,evals-recalibrate-floor)
-	@FROM=$${FROM:-$(EVALS_JSON)}; \
-	FLOORS=$${FLOORS:-0.50,0.55,0.60,0.65,0.70}; \
-	if [ ! -f "$$FROM" ]; then \
-	    echo "    ✗ FROM=$$FROM does not exist — run \`make evals\` or \`make evals-real-claude-gate\` first."; \
-	    exit 1; \
-	fi; \
-	$(AATXE_BIN) evals \
-	    --stats=false --council=false \
-	    --recalibrate-from "$$FROM" \
-	    --recalibrate-floors "$$FLOORS" \
-	    --out $(TMP)/recalibration-sweep.md
-	@echo "    ✓ evals-recalibrate-floor: also wrote $(TMP)/recalibration-sweep.md"
 
 # ----------------------------------------------------------------------------
 # Local CI via `act`
@@ -615,23 +370,6 @@ act-list: ## List workflows + jobs visible to act
 act-self-bench: ## Run the self-bench workflow under act (push event → self-compare, no base; proves the bench→compare→gate pipeline)
 	$(call say,act-self-bench)
 	$(ACT) push --workflows .github/workflows/aatxe-self-bench.yml $(ACT_FLAGS)
-
-.PHONY: act-council
-act-council: ## Run the council selftest workflow under act (stub-LLM by default; set KIMI_API_KEY + USE_REAL_KIMI=true for real Kimi)
-	$(call say,act-council)
-	@if [ "$$USE_REAL_KIMI" = "true" ] && [ -n "$$KIMI_API_KEY" ]; then \
-	    echo "    → using real Kimi (USE_REAL_KIMI=true, KIMI_API_KEY set)"; \
-	    $(ACT) workflow_dispatch \
-	        --workflows .github/workflows/aatxe-council-selftest.yml \
-	        --input use-real-kimi=true \
-	        -s KIMI_API_KEY=$$KIMI_API_KEY \
-	        $(ACT_FLAGS); \
-	else \
-	    echo "    → using stub LLM (no Moonshot calls). Set USE_REAL_KIMI=true + KIMI_API_KEY=... to flip."; \
-	    $(ACT) workflow_dispatch \
-	        --workflows .github/workflows/aatxe-council-selftest.yml \
-	        $(ACT_FLAGS); \
-	fi
 
 # ----------------------------------------------------------------------------
 # Housekeeping
