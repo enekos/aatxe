@@ -4,7 +4,8 @@
 //! every rendered body; [`crate::github`] uses it to find-and-update the
 //! existing comment on a PR instead of creating a new one each push.
 
-use crate::types::{BenchDiff, CompareReport, CompareSummary, NeutralReason, Verdict};
+use crate::stats::{coefficient_of_variation, median};
+use crate::types::{BenchDiff, BenchRun, CompareReport, CompareSummary, NeutralReason, Verdict};
 
 /// HTML comment used to identify the aatxe comment on a PR for in-place
 /// updates. Must appear as the very first line of any rendered comment body.
@@ -165,6 +166,15 @@ pub fn render_markdown(cmp: &CompareReport) -> String {
         cmp.alpha,
         pct(cmp.noisy_cv_threshold),
     ));
+    if let Some(rounds) = cmp.diffs.iter().filter_map(|d| d.rounds).min() {
+        lines.push(String::new());
+        lines.push(format!(
+            "Rows marked `·Nr` were measured in ≥ {rounds} independent process runs per side, \
+             interleaved base/head. For those, medians and Δ are the median of the per-run \
+             medians, CV is the between-run CV, and p is an exact permutation test across \
+             runs — so drift between runs widens the noise instead of faking significance."
+        ));
+    }
     lines.push(String::new());
     lines.push("</details>".to_string());
 
@@ -189,15 +199,16 @@ fn render_table(diffs: &[&BenchDiff]) -> String {
     out.push(format!("| {} |", headers.join(" | ")));
     out.push(format!("| {} |", align.join(" | ")));
     for d in diffs {
+        let by_rounds = d.rounds.is_some();
         let base_med = d
             .base
             .as_ref()
-            .map(|b| format_ns(b.median))
+            .map(|b| format_ns(center(b, by_rounds)))
             .unwrap_or_else(|| "—".into());
         let head_med = d
             .head
             .as_ref()
-            .map(|h| format_ns(h.median))
+            .map(|h| format_ns(center(h, by_rounds)))
             .unwrap_or_else(|| "—".into());
         let delta = d
             .delta_pct
@@ -208,13 +219,18 @@ fn render_table(diffs: &[&BenchDiff]) -> String {
             _ => "—".into(),
         };
         let cv = match (d.base.as_ref(), d.head.as_ref()) {
-            (Some(b), Some(h)) => format!("{}→{}", pct(b.cv), pct(h.cv)),
+            (Some(b), Some(h)) => format!(
+                "{}→{}",
+                pct(spread(b, by_rounds)),
+                pct(spread(h, by_rounds))
+            ),
             _ => "—".into(),
         };
-        let p_val = d
-            .p_value
-            .map(|p| format!("{:.2e}", p))
-            .unwrap_or_else(|| "—".into());
+        let p_val = match (d.p_value, d.rounds) {
+            (Some(p), Some(n)) => format!("{:.2e} ·{}r", p, n),
+            (Some(p), None) => format!("{:.2e}", p),
+            (None, _) => "—".into(),
+        };
         out.push(format!(
             "| `{}` | {} | {} | {} | {} | {} | {} | {} |",
             escape_md(&d.name),
@@ -228,6 +244,25 @@ fn render_table(diffs: &[&BenchDiff]) -> String {
         ));
     }
     out.join("\n")
+}
+
+/// The point estimate a row shows: the median of round medians when the
+/// verdict was computed across rounds, else the pooled sample median.
+fn center(run: &BenchRun, by_rounds: bool) -> f64 {
+    if by_rounds {
+        median(&run.round_medians)
+    } else {
+        run.median
+    }
+}
+
+/// The dispersion a row shows: between-round CV, else per-sample CV.
+fn spread(run: &BenchRun, by_rounds: bool) -> f64 {
+    if by_rounds {
+        coefficient_of_variation(&run.round_medians)
+    } else {
+        run.cv
+    }
 }
 
 fn headline_for_summary(s: &CompareSummary) -> String {

@@ -2,7 +2,8 @@
 
 use aatxe_core::stats::{
     coefficient_of_variation, interquartile_range, mann_whitney_u, mean, median,
-    median_absolute_deviation, percentile, stddev, summarize_samples, trimmed_mean, welch_t,
+    median_absolute_deviation, percentile, permutation_rank_sum, stddev, summarize_samples,
+    trimmed_mean, welch_t,
 };
 
 fn close(a: f64, b: f64, tol: f64) -> bool {
@@ -256,4 +257,50 @@ fn stddev_empty_is_zero() {
 #[test]
 fn median_absolute_deviation_empty_is_zero() {
     assert_eq!(median_absolute_deviation(&[]), 0.0);
+}
+
+#[test]
+fn permutation_identical_groups_is_not_significant() {
+    let xs = [100.0, 101.0, 99.0, 100.5, 100.2];
+    assert!(permutation_rank_sum(&xs, &xs) > 0.5);
+}
+
+#[test]
+fn permutation_fully_separated_5v5_hits_exact_minimum() {
+    // Every head round slower than every base round: only the observed split
+    // and its mirror are that extreme, so p = 2 / C(10, 5) = 2 / 252.
+    let base = [100.0, 101.0, 102.0, 103.0, 104.0];
+    let head = [110.0, 111.0, 112.0, 113.0, 114.0];
+    let p = permutation_rank_sum(&head, &base);
+    assert!(close(p, 2.0 / 252.0, 1e-12), "p = {p}");
+}
+
+#[test]
+fn permutation_3v3_can_never_reach_alpha() {
+    let p = permutation_rank_sum(&[200.0, 201.0, 202.0], &[100.0, 101.0, 102.0]);
+    assert!(close(p, 0.1, 1e-12), "p = {p}");
+}
+
+#[test]
+fn permutation_large_groups_use_deterministic_sampling() {
+    let base: Vec<f64> = (0..12).map(|i| 100.0 + i as f64).collect();
+    let head: Vec<f64> = (0..12).map(|i| 130.0 + i as f64).collect();
+    let p1 = permutation_rank_sum(&head, &base);
+    let p2 = permutation_rank_sum(&head, &base);
+    assert_eq!(p1, p2);
+    assert!(p1 < 0.001, "p = {p1}");
+}
+
+#[test]
+fn permutation_empty_side_is_not_significant() {
+    assert_eq!(permutation_rank_sum(&[], &[1.0]), 1.0);
+}
+
+#[test]
+fn permutation_one_outlier_round_cannot_carry_the_verdict() {
+    // Four head rounds interleave with base; one is a 3× outlier. A mean-based
+    // statistic would chase it; the rank sum barely moves.
+    let base = [100.0, 102.0, 104.0, 106.0, 108.0];
+    let head = [101.0, 103.0, 105.0, 107.0, 300.0];
+    assert!(permutation_rank_sum(&head, &base) > 0.4);
 }

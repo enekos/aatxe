@@ -121,6 +121,7 @@ mod tests {
                 p_value: None,
                 p_value_welch: None,
                 max_cv: None,
+                rounds: None,
                 verdict: aatxe_core::types::Verdict::Neutral,
                 neutral_reason: None,
             }],
@@ -180,6 +181,7 @@ mod tests {
             p_value: None,
             p_value_welch: None,
             max_cv: None,
+            rounds: None,
             verdict: aatxe_core::types::Verdict::New,
             neutral_reason: None,
         });

@@ -1,9 +1,10 @@
 # Self-bench workflow — aatxe gating its own performance with aatxe.
 #
 # The most meta lane in the repo: it builds aatxe's own microbenchmark
-# binaries (`core-bench`, `ast-bench`, `council-bench`), runs them on HEAD,
-# runs them again on the PR base, and pipes both through `aatxe compare`
-# — the exact comparator a downstream consumer's gate uses. A regression in
+# binaries (`core-bench`, `ast-bench`, `council-bench`) for HEAD and for the
+# PR base, runs them in interleaved rounds (base,head / head,base / …), and
+# pipes every round through `aatxe compare` — the exact comparator a
+# downstream consumer's gate uses. A regression in
 # the statistical brain (`aatxe-core`) or the tree-sitter scope extractor
 # (`aatxe-ast`) now fails aatxe's own PR queue.
 #
@@ -27,10 +28,10 @@ on:
       threshold:
         description: "Median-delta regression threshold (fraction)"
         required: false
-        default: '0.12'
+        default: '0.05'
         type: string
       alpha:
-        description: "Mann-Whitney U significance level"
+        description: "Significance level (permutation test across rounds)"
         required: false
         default: '0.05'
         type: string
@@ -44,22 +45,22 @@ permissions:
   pull-requests: write
 
 env:
-  # Each self-bench example binary + the service tag the comparator pairs on.
-  # Keep in sync with examples/*/Cargo.toml and the perf-vs PerfBenchArg enum.
+  # Rounds, not samples, are the unit of replication. Samples inside one
+  # process run share its caches, CPU frequency and noisy neighbours, so two
+  # back-to-back single runs differ by a systematic 5-9% on shared runners —
+  # and at n=200 samples Mann-Whitney calls that p≈0. The old lane had to
+  # raise the threshold to 12% to stop flapping.
   #
-  # Threshold is 0.12, NOT the 0.05 a downstream consumer would use. These
-  # benches are tiny, allocation-bound microbenchmarks (prompt assembly, JSON
-  # parse, dedup) and HEAD vs base are measured in *separate phases* — a git
-  # checkout + cargo rebuild churns caches/thermals between them. That
-  # systematic between-phase drift runs ~5-9% on shared GH-hosted runners; at
-  # n=200 samples even a 5% offset gives p≈0, so the significance signal can't
-  # filter it and the CV noise-gate (<0.25) still passes. Measured empirically:
-  # two runs of identical code flap regression/improvement at a 0.05 gate.
-  # 0.12 clears that noise floor while still catching a real regression in
-  # pure-Rust hot code. (Tracked: a best-of-N / interleaved harness would let
-  # this drop back toward 0.05.)
-  THRESHOLD: ${{ github.event.inputs.threshold || '0.12' }}
+  # Now each side runs ROUNDS times, interleaved ABBA so drift lands on both
+  # sides equally, and `aatxe compare` tests across round medians (exact
+  # permutation test, between-round CV for the noise gate). Drift widens the
+  # noise instead of faking significance, so the threshold is back to the
+  # 5% a downstream consumer uses. 8 vs 8 rounds → min p ≈ 1.6e-4; the
+  # benches are sub-second, so the extra rounds cost ~30 s.
+  THRESHOLD: ${{ github.event.inputs.threshold || '0.05' }}
   ALPHA: ${{ github.event.inputs.alpha || '0.05' }}
+  ROUNDS: '8'
+  SERVICES: core ast council
 
 jobs:
   self-bench:
@@ -84,62 +85,64 @@ jobs:
             --bin aatxe-core-bench \
             --bin aatxe-ast-bench \
             --bin aatxe-council-bench
-          # Stash HEAD artefacts so the base checkout can't clobber them.
-          mkdir -p /tmp/aatxe-bin
-          cp target/release/aatxe              /tmp/aatxe-bin/
-          cp target/release/aatxe-core-bench   /tmp/aatxe-bin/
-          cp target/release/aatxe-ast-bench    /tmp/aatxe-bin/
-          cp target/release/aatxe-council-bench /tmp/aatxe-bin/
-
-      - name: Bench HEAD
-        run: |
-          mkdir -p /tmp/head
-          # Process-level warm-up: the harness only does 5 *intra-process*
-          # warmup batches, which don't cover the cold-start of a freshly
-          # exec'd, freshly-built binary — code pages and CPU caches are cold,
-          # so the FIRST benches in the suite (e.g. diff::parse_unified_diff)
-          # read systematically slow. HEAD and base are built + run cold in
-          # separate phases, so that cold-start lands asymmetrically and shows
-          # up as a phantom regression. A throwaway run warms the binary so the
-          # measured run is steady-state on both sides.
-          for b in core ast council; do
-            "/tmp/aatxe-bin/aatxe-${b}-bench" > /dev/null 2>&1 || true
+          # Stash HEAD artefacts so the base build can't clobber them.
+          mkdir -p /tmp/aatxe-bin/head /tmp/aatxe-bin/base
+          cp target/release/aatxe /tmp/aatxe-bin/
+          for svc in $SERVICES; do
+            cp "target/release/aatxe-${svc}-bench" /tmp/aatxe-bin/head/
           done
-          AATXE_SERVICE=aatxe-core    AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-core-bench    > /tmp/head/core.json
-          AATXE_SERVICE=aatxe-ast     AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-ast-bench     > /tmp/head/ast.json
-          AATXE_SERVICE=aatxe-council AATXE_REF=HEAD /tmp/aatxe-bin/aatxe-council-bench > /tmp/head/council.json
-          echo "    ✓ HEAD benched (core / ast / council)"
 
-      - name: Bench base (best-effort — base may predate a bench)
+      - name: Build base bench binaries (best-effort — base may predate a bench)
         if: github.event_name == 'pull_request'
         continue-on-error: true
         run: |
           set +e
-          mkdir -p /tmp/base
           git fetch origin "${{ github.base_ref }}" --depth=1
-          git checkout -q "origin/${{ github.base_ref }}"
-          # Build + run each bench as it exists on the base ref, one at a
-          # time. Per-bench (not a single multi-bin cargo invocation) because
+          git worktree add --detach /tmp/aatxe-base "origin/${{ github.base_ref }}"
+          cd /tmp/aatxe-base
+          # Per-bench (not one multi-bin cargo invocation) because
           # `cargo build --bin A --bin B` fails atomically if *any* bin is
-          # unknown on base — that would starve a bench that does exist there.
-          # Delete the stale HEAD-built binary first so a base build failure
-          # can't silently fall back to running HEAD's binary as the "base":
-          # absence must mean "new bench → informational", never "no change".
-          for svc in core ast council; do
+          # unknown on base — that would starve a bench that does exist
+          # there. A missing base binary means "new bench → informational",
+          # never "no change". The worktree has its own target/, so a base
+          # build failure can't fall back to HEAD's binary.
+          for svc in $SERVICES; do
             bin="target/release/aatxe-${svc}-bench"
-            rm -f "$bin"
             if cargo build --release --bin "aatxe-${svc}-bench" 2>/dev/null && [ -x "$bin" ]; then
-              # Throwaway warm-up run (see "Bench HEAD") so base is measured at
-              # steady state too — symmetric with HEAD, kills cold-start drift.
-              "$bin" > /dev/null 2>&1 || true
-              AATXE_SERVICE="aatxe-${svc}" AATXE_REF="${{ github.base_ref }}" "$bin" > "/tmp/base/${svc}.json" \
-                && echo "    ✓ base benched: ${svc}" \
-                || echo "    → base bench failed for ${svc} (treated as new)"
+              cp "$bin" /tmp/aatxe-bin/base/
+              echo "    ✓ base built: ${svc}"
             else
               echo "    → no base binary for ${svc} (new bench — informational only)"
             fi
           done
-          git checkout -q -
+
+      - name: Bench HEAD and base in interleaved rounds
+        run: |
+          mkdir -p /tmp/head /tmp/base
+          run_side() { # side svc round
+            local bin="/tmp/aatxe-bin/$1/aatxe-$2-bench"
+            [ -x "$bin" ] || return 0
+            AATXE_SERVICE="aatxe-$2" AATXE_REF="$1" "$bin" > "/tmp/$1/$2.r$3.json" \
+              || { echo "    ! $1 bench failed for $2 (round $3)"; rm -f "/tmp/$1/$2.r$3.json"; }
+          }
+          # Warm-up round, discarded: a freshly built, freshly exec'd binary
+          # starts with cold code pages and caches.
+          for svc in $SERVICES; do
+            for side in head base; do
+              bin="/tmp/aatxe-bin/${side}/aatxe-${svc}-bench"
+              [ -x "$bin" ] && "$bin" > /dev/null 2>&1 || true
+            done
+          done
+          # ABBA: odd rounds base first, even rounds head first, per bench,
+          # so neither side systematically runs on a warmer machine.
+          for round in $(seq 1 "$ROUNDS"); do
+            if [ $((round % 2)) = 1 ]; then order="base head"; else order="head base"; fi
+            for svc in $SERVICES; do
+              for side in $order; do run_side "$side" "$svc" "$round"; done
+            done
+          done
+          echo "    ✓ benched ${ROUNDS} interleaved rounds"
+          ls /tmp/head /tmp/base
 
       - name: Compare + gate (per service)
         env:
@@ -148,15 +151,15 @@ jobs:
           set -e
           regressed=0
           : > /tmp/self-bench-report.md
-          for svc in core ast council; do
-            head="/tmp/head/${svc}.json"
-            base="/tmp/base/${svc}.json"
+          for svc in $SERVICES; do
+            heads=(/tmp/head/${svc}.r*.json)
+            bases=(/tmp/base/${svc}.r*.json)
             out="/tmp/${svc}-cmp.json"
             md="/tmp/${svc}-cmp.md"
-            if [ -f "$base" ]; then
-              echo "### aatxe-${svc} (HEAD vs ${{ github.base_ref }})" >> /tmp/self-bench-report.md
+            if [ -e "${bases[0]}" ]; then
+              echo "### aatxe-${svc} (HEAD vs ${{ github.base_ref }}, ${#bases[@]}×${#heads[@]} rounds)" >> /tmp/self-bench-report.md
               if /tmp/aatxe-bin/aatxe compare \
-                   --base "$base" --head "$head" \
+                   --base "${bases[@]}" --head "${heads[@]}" \
                    --threshold "$THRESHOLD" --alpha "$ALPHA" \
                    --markdown "$md" --out "$out" \
                    --fail-on-regression; then
@@ -171,13 +174,14 @@ jobs:
                 fi
               fi
             else
-              # No base baseline — self-compare so we still render + prove
-              # the pipeline, but never gate on it.
-              echo "### aatxe-${svc} (new bench — no base baseline)" >> /tmp/self-bench-report.md
+              # No base baseline (push to master, `act`, or a new bench) —
+              # self-compare so we still render + prove the pipeline, but
+              # never gate on it.
+              echo "### aatxe-${svc} (no base baseline — informational)" >> /tmp/self-bench-report.md
               /tmp/aatxe-bin/aatxe compare \
-                --base "$head" --head "$head" \
+                --base "${heads[@]}" --head "${heads[@]}" \
                 --markdown "$md" --out "$out"
-              echo "    → aatxe-${svc}: new bench, informational self-compare"
+              echo "    → aatxe-${svc}: no base, informational self-compare"
             fi
             cat "$md" >> /tmp/self-bench-report.md
             echo "" >> /tmp/self-bench-report.md
@@ -202,6 +206,7 @@ jobs:
           name: aatxe-self-bench
           path: |
             /tmp/head/*.json
+            /tmp/base/*.json
             /tmp/*-cmp.json
             /tmp/self-bench-report.md
           if-no-files-found: ignore

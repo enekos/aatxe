@@ -151,12 +151,17 @@ pub struct PerfVsArgs {
     /// Median-delta threshold for "meaningful" change (default 0.05 = 5%).
     #[arg(long, default_value_t = 0.05)]
     pub threshold: f64,
-    /// p-value cutoff for the Mann–Whitney U test (default 0.05).
+    /// p-value cutoff for the significance test (default 0.05).
     #[arg(long, default_value_t = 0.05)]
     pub alpha: f64,
     /// CV cutoff above which the noise gate engages (default 0.25 = 25%).
     #[arg(long, default_value_t = 0.25)]
     pub noisy_cv: f64,
+    /// Independent process runs per side, interleaved base/head (ABBA order)
+    /// so machine drift hits both sides equally. With ≥ 4 the verdict is
+    /// computed across rounds; 1 restores the old single-run behaviour.
+    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=50))]
+    pub rounds: u32,
     /// Stream bench stdout to the caller as it runs (default off — only
     /// the final summary prints).
     #[arg(long)]
@@ -223,13 +228,17 @@ pub struct RunArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CompareArgs {
-    /// Base-side RunReport JSON. Mutually exclusive with `--against-local`.
+    /// Base-side RunReport JSON. Repeat it (or pass several paths) to pool
+    /// independent runs ("rounds"); with ≥ 4 rounds on both sides the verdict
+    /// is computed across rounds instead of samples. Mutually exclusive with
+    /// `--against-local`.
     #[arg(
         long,
+        num_args = 1..,
         required_unless_present = "against_local",
         conflicts_with = "against_local"
     )]
-    pub base: Option<PathBuf>,
+    pub base: Vec<PathBuf>,
     /// Use the locally-saved baseline (see `aatxe baseline save`) as the
     /// base side instead of `--base`.
     #[arg(long)]
@@ -242,8 +251,9 @@ pub struct CompareArgs {
     /// (falls back to the current directory outside a git repo).
     #[arg(long)]
     pub baseline_dir: Option<PathBuf>,
-    #[arg(long)]
-    pub head: PathBuf,
+    /// Head-side RunReport JSON. Repeatable like `--base`.
+    #[arg(long, num_args = 1.., required = true)]
+    pub head: Vec<PathBuf>,
     /// JSON output path for the CompareReport. Default `./aatxe-report.json`.
     #[arg(long)]
     pub out: Option<PathBuf>,
@@ -253,7 +263,7 @@ pub struct CompareArgs {
     /// Median-delta threshold for "meaningful" change (default 0.05 = 5%).
     #[arg(long, default_value_t = 0.05)]
     pub threshold: f64,
-    /// p-value cutoff for the Mann–Whitney U test (default 0.05).
+    /// p-value cutoff for the significance test (default 0.05).
     #[arg(long, default_value_t = 0.05)]
     pub alpha: f64,
     /// CV cutoff above which the noise gate engages (default 0.25 = 25%).
@@ -741,7 +751,7 @@ pub struct UiArgs {
     /// Median-delta threshold for "meaningful" change (default 0.05 = 5%).
     #[arg(long, default_value_t = 0.05)]
     pub threshold: f64,
-    /// p-value cutoff for the Mann–Whitney U test (default 0.05).
+    /// p-value cutoff for the significance test (default 0.05).
     #[arg(long, default_value_t = 0.05)]
     pub alpha: f64,
     /// CV cutoff above which the noise gate engages (default 0.25 = 25%).

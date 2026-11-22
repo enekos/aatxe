@@ -29,6 +29,7 @@ fn run(name: &str) -> BenchRun {
         p50: 124.5,
         p95: 146.0,
         p99: 148.0,
+        round_medians: Vec::new(),
         metrics: Vec::new(),
         tags: Vec::new(),
     }
@@ -92,6 +93,7 @@ fn regression_count_in_headline() {
         p_value: Some(1e-6),
         p_value_welch: Some(1e-6),
         max_cv: Some(0.1),
+        rounds: None,
         verdict: Verdict::Regression,
         neutral_reason: None,
     };
@@ -114,6 +116,7 @@ fn out_of_scope_renders_under_dedicated_section() {
         p_value: None,
         p_value_welch: None,
         max_cv: None,
+        rounds: None,
         verdict: Verdict::OutOfScope,
         neutral_reason: None,
     };
@@ -135,6 +138,7 @@ fn noisy_neutral_is_called_out() {
         p_value: Some(0.4),
         p_value_welch: Some(0.4),
         max_cv: Some(0.5),
+        rounds: None,
         verdict: Verdict::Neutral,
         neutral_reason: Some(NeutralReason::TooNoisy),
     };
@@ -173,6 +177,7 @@ fn improvement_only_run_gets_its_own_headline() {
         p_value: Some(1e-6),
         p_value_welch: Some(1e-6),
         max_cv: Some(0.1),
+        rounds: None,
         verdict: Verdict::Improvement,
         neutral_reason: None,
     };
@@ -201,6 +206,7 @@ fn pipe_character_in_bench_name_is_escaped() {
         p_value: Some(1e-6),
         p_value_welch: Some(1e-6),
         max_cv: Some(0.1),
+        rounds: None,
         verdict: Verdict::Regression,
         neutral_reason: None,
     };
@@ -245,6 +251,7 @@ fn inventory_section_renders_only_new_when_no_removed() {
         p_value: None,
         p_value_welch: None,
         max_cv: None,
+        rounds: None,
         verdict: Verdict::New,
         neutral_reason: None,
     };
@@ -268,6 +275,7 @@ fn inventory_section_renders_only_removed_when_no_new() {
         p_value: None,
         p_value_welch: None,
         max_cv: None,
+        rounds: None,
         verdict: Verdict::Removed,
         neutral_reason: None,
     };
@@ -295,6 +303,7 @@ fn very_long_bench_name_does_not_break_table() {
         p_value: Some(1e-6),
         p_value_welch: Some(1e-6),
         max_cv: Some(0.1),
+        rounds: None,
         verdict: Verdict::Regression,
         neutral_reason: None,
     };
@@ -320,6 +329,7 @@ fn noisy_callout_uses_plural_form_when_multiple() {
         p_value: Some(0.4),
         p_value_welch: Some(0.4),
         max_cv: Some(0.5),
+        rounds: None,
         verdict: Verdict::Neutral,
         neutral_reason: Some(NeutralReason::TooNoisy),
     };
