@@ -7,32 +7,29 @@
 use crate::cli::CompareArgs;
 use crate::commands::Outcome;
 use aatxe_core::types::RunReport;
-use aatxe_core::{compare_reports, has_regressions, render_markdown, CompareOptions};
-use anyhow::{Context, Result};
+use aatxe_core::{compare_reports, has_regressions, merge_rounds, render_markdown, CompareOptions};
+use anyhow::{anyhow, Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn execute(args: CompareArgs) -> Result<Outcome> {
     // clap guarantees exactly one of --base / --against-local is present.
-    let base_path = match args.base.as_ref() {
-        Some(p) => p.clone(),
-        None => {
-            let p = crate::commands::baseline::resolve_for_compare(
-                args.baseline_dir.as_deref(),
-                &args.baseline_name,
-            )?;
-            eprintln!(
-                "aatxe compare: base = local baseline '{}' ({})",
-                args.baseline_name,
-                p.display()
-            );
-            p
-        }
+    let base_paths = if args.base.is_empty() {
+        let p = crate::commands::baseline::resolve_for_compare(
+            args.baseline_dir.as_deref(),
+            &args.baseline_name,
+        )?;
+        eprintln!(
+            "aatxe compare: base = local baseline '{}' ({})",
+            args.baseline_name,
+            p.display()
+        );
+        vec![p]
+    } else {
+        args.base.clone()
     };
-    let base: RunReport = read_report(&base_path)
-        .with_context(|| format!("reading base report from {}", base_path.display()))?;
-    let head: RunReport = read_report(&args.head)
-        .with_context(|| format!("reading head report from {}", args.head.display()))?;
+    let base = read_side(&base_paths, "base")?;
+    let head = read_side(&args.head, "head")?;
 
     let opts = CompareOptions {
         threshold_pct: args.threshold,
@@ -63,10 +60,21 @@ pub fn execute(args: CompareArgs) -> Result<Outcome> {
     Ok(Outcome::Ok)
 }
 
-fn read_report(p: &PathBuf) -> Result<RunReport> {
+fn read_report(p: &Path) -> Result<RunReport> {
     let raw = fs::read_to_string(p)?;
     let parsed = serde_json::from_str(&raw)?;
     Ok(parsed)
+}
+
+/// Read one side's reports and pool them into a single multi-round report.
+fn read_side(paths: &[PathBuf], side: &str) -> Result<RunReport> {
+    let reports = paths
+        .iter()
+        .map(|p| {
+            read_report(p).with_context(|| format!("reading {side} report from {}", p.display()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    merge_rounds(&reports).ok_or_else(|| anyhow!("no {side} reports given"))
 }
 
 fn summary_to_stderr(cmp: &aatxe_core::types::CompareReport) {

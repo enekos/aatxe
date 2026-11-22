@@ -61,10 +61,7 @@ pub fn describe(lang: Language, file_path: &str, source: &str) -> FileGraph {
 /// the caller can decide whether to fall back to the regex extractor
 /// (always succeeds) or skip the file entirely.
 pub fn language_for_path(path: &str) -> Option<Language> {
-    let ext = match path.rfind('.') {
-        Some(i) => &path[i + 1..],
-        None => return None,
-    };
+    let ext = &path[path.rfind('.')? + 1..];
     // Bias to the matching language's `source_extensions` so we stay in
     // lockstep with `aatxe-core::affected`'s import resolver.
     if Language::Ts

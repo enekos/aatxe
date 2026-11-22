@@ -55,7 +55,7 @@ fn main() {
                 let mut pool = filter_pool.borrow_mut();
                 let idx = filter_idx.get();
                 let slot = idx % pool.len();
-                let input = pool[slot].drain(..).collect::<Vec<_>>();
+                let input = std::mem::take(&mut pool[slot]);
                 filter_idx.set(idx + 1);
                 let (kept, dropped) =
                     filter_ignored(std::hint::black_box(input), DEFAULT_IGNORED_PATTERNS);
@@ -78,7 +78,7 @@ fn main() {
                 let mut pool = chunk_pool.borrow_mut();
                 let idx = chunk_idx.get();
                 let slot = idx % pool.len();
-                let input = pool[slot].drain(..).collect::<Vec<_>>();
+                let input = std::mem::take(&mut pool[slot]);
                 chunk_idx.set(idx + 1);
                 let c = chunk_for_review_owned(
                     std::hint::black_box(input),

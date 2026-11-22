@@ -11,13 +11,32 @@
 //!    small relative to that noise, the diff is labelled `Neutral / TooNoisy`
 //!    rather than `Regression`. Prevents the PR comment getting spammed by
 //!    hopelessly noisy benches.
+//!
+//! ## Rounds — the unit of replication
+//!
+//! Samples from one process run are not independent: they share that run's
+//! caches, CPU frequency and neighbours. When both sides carry at least
+//! [`MIN_ROUNDS`] round medians (see [`crate::rounds::merge_rounds`]), all
+//! three signals move to the round level: the delta is the ratio of the
+//! median round medians, significance is an exact permutation test across
+//! rounds, and the noise gate reads the between-round CV. Drift between
+//! process runs then widens the noise instead of faking significance.
+//! Below [`MIN_ROUNDS`] the comparator falls back to per-sample statistics.
 
-use crate::stats::{mann_whitney_u, summarize_samples, welch_t};
+use crate::stats::{
+    coefficient_of_variation, mann_whitney_u, median, permutation_rank_sum, summarize_samples,
+    welch_t,
+};
 use crate::types::{
     BenchDiff, BenchRun, CompareReport, CompareSide, CompareSummary, NeutralReason, RunReport,
     Verdict,
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
+
+/// Round medians each side needs before the verdict is computed across rounds
+/// instead of samples. Four is the smallest count at which the permutation
+/// test can reach p < 0.05 (4 vs 4 → minimum p ≈ 0.029).
+pub const MIN_ROUNDS: usize = 4;
 
 /// Knobs governing the verdict. Use [`CompareOptions::default`] for the
 /// well-tested defaults; override individually if you want a tighter or
@@ -78,8 +97,9 @@ pub fn compare_reports(
 
     let mut diffs: Vec<BenchDiff> = Vec::with_capacity(all_names.len());
     for name in all_names {
-        let b = base_by_name.get(name).cloned();
-        let h = head_by_name.get(name).cloned();
+        // Move each normalized run out instead of cloning it a second time.
+        let b = base_by_name.remove(name);
+        let h = head_by_name.remove(name);
         diffs.push(diff_one(
             name.to_string(),
             b,
@@ -173,6 +193,7 @@ fn normalize(r: &BenchRun) -> BenchRun {
         p50: s.p50,
         p95: s.p95,
         p99: s.p99,
+        round_medians: r.round_medians.clone(),
         metrics: r.metrics.clone(),
         tags: r.tags.clone(),
     }
@@ -200,6 +221,7 @@ fn diff_one(
             p_value: None,
             p_value_welch: None,
             max_cv: None,
+            rounds: None,
             verdict: Verdict::New,
             neutral_reason: None,
         },
@@ -224,27 +246,31 @@ fn diff_one(
                 p_value: None,
                 p_value_welch: None,
                 max_cv: None,
+                rounds: None,
                 verdict,
                 neutral_reason: None,
             }
         }
         (None, None) => unreachable!("at least one side must be present"),
         (Some(b), Some(h)) => {
-            let delta_pct = if b.median == 0.0 {
-                0.0
-            } else {
-                (h.median - b.median) / b.median
-            };
-            let mean_delta_pct = if b.mean == 0.0 {
-                0.0
-            } else {
-                (h.mean - b.mean) / b.mean
-            };
-            let mw = mann_whitney_u(&h.samples, &b.samples);
+            let mean_delta_pct = relative_delta(b.mean, h.mean);
             let welch = welch_t(&h.samples, &b.samples);
-            let max_cv = b.cv.max(h.cv);
+            let by_rounds =
+                b.round_medians.len() >= MIN_ROUNDS && h.round_medians.len() >= MIN_ROUNDS;
+            let (delta_pct, p_value, max_cv, rounds) = if by_rounds {
+                let delta = relative_delta(median(&b.round_medians), median(&h.round_medians));
+                let p = permutation_rank_sum(&h.round_medians, &b.round_medians);
+                let cv = coefficient_of_variation(&b.round_medians)
+                    .max(coefficient_of_variation(&h.round_medians));
+                let n = b.round_medians.len().min(h.round_medians.len());
+                (delta, p, cv, Some(u32::try_from(n).unwrap_or(u32::MAX)))
+            } else {
+                let delta = relative_delta(b.median, h.median);
+                let p = mann_whitney_u(&h.samples, &b.samples).p;
+                (delta, p, b.cv.max(h.cv), None)
+            };
 
-            let significant = mw.p < opts.alpha;
+            let significant = p_value < opts.alpha;
             let meaningful = delta_pct.abs() >= opts.threshold_pct;
             let noisy = max_cv > opts.noisy_cv_threshold && delta_pct.abs() < 2.0 * max_cv;
 
@@ -266,12 +292,21 @@ fn diff_one(
                 head: Some(h),
                 delta_pct: Some(delta_pct),
                 mean_delta_pct: Some(mean_delta_pct),
-                p_value: Some(mw.p),
+                p_value: Some(p_value),
                 p_value_welch: Some(welch.p),
                 max_cv: Some(max_cv),
+                rounds,
                 verdict,
                 neutral_reason,
             }
         }
+    }
+}
+
+fn relative_delta(base: f64, head: f64) -> f64 {
+    if base == 0.0 {
+        0.0
+    } else {
+        (head - base) / base
     }
 }

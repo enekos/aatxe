@@ -28,6 +28,7 @@ fn mk_run(name: &str, file: &str, samples: Vec<f64>) -> BenchRun {
         p50: s.p50,
         p95: s.p95,
         p99: s.p99,
+        round_medians: Vec::new(),
         metrics: Vec::new(),
         tags: Vec::new(),
     }
@@ -259,6 +260,7 @@ fn schema_v1_legacy_report_is_normalised() {
         p50: 0.0,
         p95: 0.0,
         p99: 0.0,
+        round_medians: Vec::new(),
         metrics: Vec::new(),
         tags: Vec::new(),
     };
@@ -339,4 +341,94 @@ fn json_round_trip_preserves_shape() {
     assert_eq!(parsed.summary.regressions, cmp.summary.regressions);
     assert_eq!(parsed.diffs.len(), cmp.diffs.len());
     assert_eq!(parsed.diffs[0].verdict, Verdict::Regression);
+}
+
+/// Deterministic per-round samples: `n` values jittered ±2% around `center`.
+fn round_samples(center: f64, n: usize, phase: usize) -> Vec<f64> {
+    (0..n)
+        .map(|i| center * (1.0 + 0.02 * (((i * 7 + phase * 3) % 11) as f64 / 5.0 - 1.0)))
+        .collect()
+}
+
+/// One single-round report per entry of `centers`.
+fn rounds_of(centers: &[f64]) -> Vec<RunReport> {
+    centers
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| mk_report(vec![mk_run("a", "x.rs", round_samples(c, 200, i))]))
+        .collect()
+}
+
+#[test]
+fn single_round_drift_is_a_false_regression_per_sample() {
+    // The failure mode rounds exist for: identical code, one process run per
+    // side, a 7% between-run offset. 200 samples per side make Mann–Whitney
+    // call it p ≈ 0, so the per-sample gate fires.
+    let base = mk_report(vec![mk_run("a", "x.rs", round_samples(1_000.0, 200, 0))]);
+    let head = mk_report(vec![mk_run("a", "x.rs", round_samples(1_070.0, 200, 1))]);
+    let cmp = compare_reports(&base, &head, CompareOptions::default());
+    assert_eq!(cmp.diffs[0].verdict, Verdict::Regression);
+    assert_eq!(cmp.diffs[0].rounds, None);
+}
+
+#[test]
+fn round_drift_with_identical_code_is_not_a_regression() {
+    // Same code, five interleaved rounds per side, each round drifting by up
+    // to ±7%. Between-round spread swamps the side difference → neutral.
+    let base =
+        aatxe_core::merge_rounds(&rounds_of(&[1_000.0, 1_070.0, 960.0, 1_040.0, 990.0])).unwrap();
+    let head =
+        aatxe_core::merge_rounds(&rounds_of(&[1_065.0, 980.0, 1_030.0, 950.0, 1_075.0])).unwrap();
+    let cmp = compare_reports(&base, &head, CompareOptions::default());
+    let d = &cmp.diffs[0];
+    assert_eq!(d.rounds, Some(5));
+    assert_eq!(d.verdict, Verdict::Neutral, "{d:?}");
+    assert!(d.p_value.unwrap() > 0.05);
+}
+
+#[test]
+fn consistent_regression_across_rounds_is_detected() {
+    let base =
+        aatxe_core::merge_rounds(&rounds_of(&[1_000.0, 1_010.0, 990.0, 1_005.0, 995.0])).unwrap();
+    let head = aatxe_core::merge_rounds(&rounds_of(&[1_100.0, 1_090.0, 1_110.0, 1_095.0, 1_105.0]))
+        .unwrap();
+    let cmp = compare_reports(&base, &head, CompareOptions::default());
+    let d = &cmp.diffs[0];
+    assert_eq!(d.rounds, Some(5));
+    assert_eq!(d.verdict, Verdict::Regression, "{d:?}");
+    assert!((d.delta_pct.unwrap() - 0.10).abs() < 0.01);
+}
+
+#[test]
+fn too_few_rounds_fall_back_to_samples() {
+    let base = aatxe_core::merge_rounds(&rounds_of(&[1_000.0, 1_000.0, 1_000.0])).unwrap();
+    let head = aatxe_core::merge_rounds(&rounds_of(&[1_000.0, 1_000.0, 1_000.0])).unwrap();
+    let cmp = compare_reports(&base, &head, CompareOptions::default());
+    assert_eq!(cmp.diffs[0].rounds, None);
+}
+
+#[test]
+fn merge_pools_samples_and_records_round_medians() {
+    let merged = aatxe_core::merge_rounds(&rounds_of(&[1_000.0, 2_000.0])).unwrap();
+    let run = &merged.runs[0];
+    assert_eq!(run.samples.len(), 400);
+    assert_eq!(run.iterations, 400);
+    assert_eq!(run.round_medians.len(), 2);
+    // Merging a merged report keeps every round.
+    let again =
+        aatxe_core::merge_rounds(&[merged.clone(), rounds_of(&[3_000.0]).remove(0)]).unwrap();
+    assert_eq!(again.runs[0].round_medians.len(), 3);
+    assert!(aatxe_core::merge_rounds(&[]).is_none());
+}
+
+#[test]
+fn round_medians_survive_derived_stat_recompute() {
+    // A producer that leaves `elapsedNs` at 0 triggers `normalize`; the round
+    // medians must come through or the verdict silently drops to samples.
+    let mut base = aatxe_core::merge_rounds(&rounds_of(&[1_000.0; 5])).unwrap();
+    let mut head = aatxe_core::merge_rounds(&rounds_of(&[1_000.0; 5])).unwrap();
+    base.runs[0].elapsed_ns = 0.0;
+    head.runs[0].elapsed_ns = 0.0;
+    let cmp = compare_reports(&base, &head, CompareOptions::default());
+    assert_eq!(cmp.diffs[0].rounds, Some(5));
 }

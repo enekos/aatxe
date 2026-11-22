@@ -54,8 +54,17 @@ pub struct StatsScenario {
     /// Probability of an outlier sample (per draw). Outliers are pulled
     /// from `Exp(base_ns)` — heavy right-tail spikes.
     pub outlier_p: f64,
-    /// Number of samples per side.
+    /// Number of samples per side, per round.
     pub samples_per_side: u32,
+    /// Independent process runs ("rounds") per side, pooled with
+    /// [`aatxe_core::merge_rounds`]. `1` models a single run per side.
+    #[serde(default = "one_round")]
+    pub rounds: u32,
+    /// Lognormal sigma of a per-round multiplicative offset — the drift
+    /// between process runs (cache state, frequency, neighbours) that a
+    /// per-sample test can't see. `0.0` = no drift.
+    #[serde(default)]
+    pub round_drift_sigma: f64,
     /// How many independent trials to run. Verdict fractions are computed
     /// over these.
     pub iterations: u32,
@@ -146,6 +155,8 @@ pub fn default_scenarios() -> Vec<StatsScenario> {
             base_sigma: 0.05,
             outlier_p: 0.02,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations {
@@ -162,6 +173,8 @@ pub fn default_scenarios() -> Vec<StatsScenario> {
             base_sigma: 0.05,
             outlier_p: 0.02,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations {
@@ -179,6 +192,8 @@ pub fn default_scenarios() -> Vec<StatsScenario> {
             base_sigma: 0.04,
             outlier_p: 0.02,
             samples_per_side: 40,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations {
@@ -194,6 +209,8 @@ pub fn default_scenarios() -> Vec<StatsScenario> {
             base_sigma: 0.05,
             outlier_p: 0.02,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations {
@@ -211,6 +228,8 @@ pub fn default_scenarios() -> Vec<StatsScenario> {
             base_sigma: 0.30,
             outlier_p: 0.05,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations {
@@ -229,11 +248,87 @@ pub fn default_scenarios() -> Vec<StatsScenario> {
             base_sigma: 0.04,
             outlier_p: 0.02,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations {
                 max_regression_rate: Some(0.05),
                 min_neutral_rate: Some(0.90),
+                ..Default::default()
+            },
+        },
+        StatsScenario {
+            name: "null-run-drift-1-round".into(),
+            description: "Identical code, one process run per side, 4% between-run drift, \
+                          200 samples. The per-sample test reads the drift as p ≈ 0 — \
+                          recorded, not gated: this is why CI runs several rounds."
+                .into(),
+            true_delta: 0.0,
+            base_sigma: 0.03,
+            outlier_p: 0.02,
+            samples_per_side: 200,
+            rounds: 1,
+            round_drift_sigma: 0.04,
+            iterations: 200,
+            base_median_ns: 1_000.0,
+            expects: StatsExpectations::default(),
+        },
+        StatsScenario {
+            name: "null-run-drift-5-rounds".into(),
+            description: "Same 4% between-run drift, five interleaved rounds per side. \
+                          The round-level test must hold FPR near alpha."
+                .into(),
+            true_delta: 0.0,
+            base_sigma: 0.03,
+            outlier_p: 0.02,
+            samples_per_side: 200,
+            rounds: 5,
+            round_drift_sigma: 0.04,
+            iterations: 200,
+            base_median_ns: 1_000.0,
+            expects: StatsExpectations {
+                max_regression_rate: Some(0.05),
+                max_improvement_rate: Some(0.05),
+                min_neutral_rate: Some(0.90),
+                ..Default::default()
+            },
+        },
+        StatsScenario {
+            name: "regression-10pct-run-drift-5-rounds".into(),
+            description: "Head 10% slower under 4% between-run drift, five rounds per side. \
+                          Rounds must still catch a real regression."
+                .into(),
+            true_delta: 0.10,
+            base_sigma: 0.03,
+            outlier_p: 0.02,
+            samples_per_side: 200,
+            rounds: 5,
+            round_drift_sigma: 0.04,
+            iterations: 200,
+            base_median_ns: 1_000.0,
+            expects: StatsExpectations {
+                min_regression_rate: Some(0.75),
+                max_improvement_rate: Some(0.01),
+                ..Default::default()
+            },
+        },
+        StatsScenario {
+            name: "regression-6pct-quiet-5-rounds".into(),
+            description: "Head 6% slower, 1% between-run drift (a quiet or isolated runner), \
+                          five rounds per side. Borderline detection power with rounds."
+                .into(),
+            true_delta: 0.06,
+            base_sigma: 0.03,
+            outlier_p: 0.02,
+            samples_per_side: 200,
+            rounds: 5,
+            round_drift_sigma: 0.01,
+            iterations: 200,
+            base_median_ns: 1_000.0,
+            expects: StatsExpectations {
+                min_regression_rate: Some(0.55),
+                max_improvement_rate: Some(0.01),
                 ..Default::default()
             },
         },
@@ -285,33 +380,12 @@ fn run_one_scenario(scenario: &StatsScenario) -> StatsScenarioResult {
 
     for iter in 0..scenario.iterations {
         let mut rng = SplitMix64::new(seed_base.wrapping_add(iter as u64));
-        let base_samples = synth_samples(
+        let base = synth_side(&mut rng, scenario, scenario.base_median_ns, "base");
+        let head = synth_side(
             &mut rng,
-            scenario.base_median_ns,
-            scenario.base_sigma,
-            scenario.outlier_p,
-            scenario.samples_per_side,
-        );
-        let head_samples = synth_samples(
-            &mut rng,
+            scenario,
             scenario.base_median_ns * (1.0 + scenario.true_delta),
-            scenario.base_sigma,
-            scenario.outlier_p,
-            scenario.samples_per_side,
-        );
-        let base = mk_run_report(
-            "scenario",
-            "base",
-            scenario.base_median_ns,
-            scenario.base_sigma,
-            base_samples,
-        );
-        let head = mk_run_report(
-            "scenario",
             "head",
-            scenario.base_median_ns * (1.0 + scenario.true_delta),
-            scenario.base_sigma,
-            head_samples,
         );
         let cmp = compare_reports(&base, &head, CompareOptions::default());
         let diff = &cmp.diffs[0];
@@ -404,6 +478,30 @@ fn run_one_scenario(scenario: &StatsScenario) -> StatsScenarioResult {
     }
 }
 
+fn one_round() -> u32 {
+    1
+}
+
+/// One side of a scenario: `rounds` single-run reports, each shifted by its
+/// own drift offset, pooled into one report.
+fn synth_side(rng: &mut SplitMix64, scenario: &StatsScenario, mu: f64, r#ref: &str) -> RunReport {
+    let rounds: Vec<RunReport> = (0..scenario.rounds.max(1))
+        .map(|_| {
+            let drift = (scenario.round_drift_sigma * standard_normal(rng)).exp();
+            let samples = synth_samples(
+                rng,
+                mu * drift,
+                scenario.base_sigma,
+                scenario.outlier_p,
+                scenario.samples_per_side,
+            );
+            mk_run_report("scenario", r#ref, mu, scenario.base_sigma, samples)
+        })
+        .collect();
+    // Non-empty by construction (`rounds.max(1)`), so the merge always yields.
+    aatxe_core::merge_rounds(&rounds).expect("at least one round")
+}
+
 #[derive(Default)]
 struct VerdictCounts {
     regression: u32,
@@ -448,6 +546,7 @@ fn mk_run_report(
             p50: 0.0,
             p95: 0.0,
             p99: 0.0,
+            round_medians: Vec::new(),
             metrics: Vec::new(),
             tags: Vec::new(),
         }],
@@ -543,6 +642,8 @@ mod tests {
             base_sigma: 0.05,
             outlier_p: 0.02,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations::default(),
@@ -562,6 +663,8 @@ mod tests {
             base_sigma: 0.05,
             outlier_p: 0.02,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations::default(),
@@ -583,6 +686,8 @@ mod tests {
             base_sigma: 0.05,
             outlier_p: 0.02,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations::default(),
@@ -608,6 +713,8 @@ mod tests {
             base_sigma: 0.30,
             outlier_p: 0.05,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 200,
             base_median_ns: 1_000.0,
             expects: StatsExpectations::default(),
@@ -654,6 +761,8 @@ mod tests {
             base_sigma: 0.05,
             outlier_p: 0.02,
             samples_per_side: 30,
+            rounds: 1,
+            round_drift_sigma: 0.0,
             iterations: 50,
             base_median_ns: 1_000.0,
             expects: StatsExpectations::default(),

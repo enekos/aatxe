@@ -132,6 +132,14 @@ pub struct BenchRun {
     /// (e.g. `["core", "hot-path"]`). Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tags: Vec<String>,
+    /// Median of each independent process run ("round") this bench was
+    /// measured in, in nanoseconds. Filled by [`crate::rounds::merge_rounds`]
+    /// when several single-run reports are pooled. With enough rounds on both
+    /// sides the comparator treats the *round*, not the sample, as the unit of
+    /// replication, so drift between process runs can't masquerade as a
+    /// significant change. Omitted when empty (single-run reports).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub round_medians: Vec<f64>,
 }
 
 /// Marker present on head reports produced by `aatxe run --affected`.
@@ -199,12 +207,17 @@ pub struct BenchDiff {
     pub delta_pct: Option<f64>,
     /// Relative mean delta. Provided for diagnostic display.
     pub mean_delta_pct: Option<f64>,
-    /// Two-tailed Mann–Whitney U p-value.
+    /// Two-tailed p-value. Mann–Whitney U over samples, or an exact
+    /// permutation test over round medians when [`Self::rounds`] is set.
     pub p_value: Option<f64>,
     /// Two-tailed Welch's t-test p-value (diagnostic).
     pub p_value_welch: Option<f64>,
     /// Max coefficient of variation between base/head. Used by the noise gate.
     pub max_cv: Option<f64>,
+    /// Rounds per side (the smaller side) when the verdict was computed across
+    /// independent rounds; `None` when it fell back to sample-level statistics.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub rounds: Option<u32>,
     pub verdict: Verdict,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub neutral_reason: Option<NeutralReason>,

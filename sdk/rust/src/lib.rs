@@ -140,6 +140,7 @@ impl Suite {
             p50: s.p50,
             p95: s.p95,
             p99: s.p99,
+            round_medians: Vec::new(),
             metrics: Vec::new(),
             tags: Vec::new(),
         });

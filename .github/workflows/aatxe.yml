@@ -13,9 +13,12 @@
 #         pull-requests: write
 #
 # What this workflow does:
-#   1. Checks out HEAD and runs benches → /tmp/head.json
-#   2. Checks out base (PR base ref) and runs benches → /tmp/base.json
-#   3. Compares them with the configured threshold and significance
+#   1. Checks out HEAD, and the PR base into a sibling worktree
+#   2. Runs one discarded warm-up per side, then `rounds` measured rounds,
+#      interleaved ABBA (base,head / head,base / …) → /tmp/{head,base}/rN.json
+#   3. Compares them with the configured threshold and significance — with
+#      ≥ 4 rounds the verdict is computed across rounds, so machine drift
+#      between runs can't fake a regression
 #   4. Posts (or updates) the sticky aatxe comment on the PR
 #   5. Fails the lane (exit 2) if any bench regressed
 
@@ -43,10 +46,15 @@ on:
         default: '0.05'
         type: string
       alpha:
-        description: "Mann-Whitney U significance level"
+        description: "Significance level"
         required: false
         default: '0.05'
         type: string
+      rounds:
+        description: "Interleaved runs per side (≥ 4 enables the round-level test; 1 = legacy single run)"
+        required: false
+        default: 5
+        type: number
       runner-cmd:
         description: "Optional override for the language runner command"
         required: false
@@ -92,42 +100,45 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Bench HEAD
-        env:
-          AATXE_TS_RUNNER: ${{ inputs.runner-cmd }}
-          AATXE_GO_RUNNER: ${{ inputs.runner-cmd }}
-          AATXE_RUST_RUNNER: ${{ inputs.runner-cmd }}
-        run: |
-          if [[ "${{ inputs.affected }}" == "true" ]]; then
-            "$AATXE_BIN" run --lang ${{ inputs.lang }} \
-              --service "${{ inputs.service }}" \
-              --affected --base "origin/${{ github.base_ref }}" \
-              --out /tmp/head.json
-          else
-            "$AATXE_BIN" run --lang ${{ inputs.lang }} \
-              --service "${{ inputs.service }}" \
-              --out /tmp/head.json
-          fi
-
-      - name: Checkout base
+      - name: Check out base into a worktree
         run: |
           git fetch origin "${{ github.base_ref }}"
-          git checkout "origin/${{ github.base_ref }}"
+          git worktree add --detach /tmp/aatxe-base "origin/${{ github.base_ref }}"
 
-      - name: Bench base
+      - name: Bench HEAD and base in interleaved rounds
         env:
           AATXE_TS_RUNNER: ${{ inputs.runner-cmd }}
           AATXE_GO_RUNNER: ${{ inputs.runner-cmd }}
           AATXE_RUST_RUNNER: ${{ inputs.runner-cmd }}
+          ROUNDS: ${{ inputs.rounds }}
         run: |
-          "$AATXE_BIN" run --lang ${{ inputs.lang }} \
-            --service "${{ inputs.service }}" \
-            --out /tmp/base.json
+          mkdir -p /tmp/head /tmp/base
+          head_args=()
+          if [[ "${{ inputs.affected }}" == "true" ]]; then
+            head_args=(--affected --base "origin/${{ github.base_ref }}")
+          fi
+          bench() { # side out
+            if [[ "$1" == head ]]; then
+              "$AATXE_BIN" run --lang ${{ inputs.lang }} \
+                --service "${{ inputs.service }}" "${head_args[@]}" --out "$2"
+            else
+              (cd /tmp/aatxe-base && "$AATXE_BIN" run --lang ${{ inputs.lang }} \
+                --service "${{ inputs.service }}" --out "$2")
+            fi
+          }
+          # Warm-up, discarded: builds both trees and runs each once cold.
+          bench head /tmp/head/warmup.json
+          bench base /tmp/base/warmup.json
+          rm -f /tmp/head/warmup.json /tmp/base/warmup.json
+          for round in $(seq 1 "$ROUNDS"); do
+            if (( round % 2 )); then order="base head"; else order="head base"; fi
+            for side in $order; do bench "$side" "/tmp/${side}/r${round}.json"; done
+          done
 
       - name: Compare + render markdown
         run: |
           "$AATXE_BIN" compare \
-            --base /tmp/base.json --head /tmp/head.json \
+            --base /tmp/base/r*.json --head /tmp/head/r*.json \
             --threshold ${{ inputs.threshold }} \
             --alpha ${{ inputs.alpha }} \
             --markdown /tmp/aatxe-report.md \

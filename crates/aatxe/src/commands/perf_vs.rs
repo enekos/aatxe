@@ -9,15 +9,19 @@
 //!   1. Resolve `--against` to a SHA, refuse if it equals HEAD.
 //!   2. `git worktree add --detach <wt>/<sha-short> <sha>` (reuse if it
 //!      already exists at the same SHA — cheap rebuild path).
-//!   3. Build the bench binary in HEAD and the worktree (parallel).
-//!   4. Run the bench in each, producing two `RunReport` JSONs.
-//!   5. `compare_reports` + render markdown; print summary to stdout.
+//!   3. Build the bench binary in HEAD and the worktree, with one discarded
+//!      warm-up run per side (cold page cache / freshly exec'd binary).
+//!   4. Run `--rounds` measured rounds, interleaved ABBA (base,head /
+//!      head,base / …) so machine drift lands on both sides equally, and
+//!      pool each side's rounds into one `RunReport`.
+//!   5. `compare_reports` + render markdown; print summary to stdout. With
+//!      ≥ 4 rounds the verdict is computed across rounds, not samples.
 
 use crate::cli::{PerfBenchArg, PerfVsArgs};
 use crate::commands::Outcome;
 use crate::sandbox::Isolation;
 use aatxe_core::types::{BenchRun, Language, RunReport, SCHEMA_VERSION};
-use aatxe_core::{compare_reports, has_regressions, render_markdown, CompareOptions};
+use aatxe_core::{compare_reports, has_regressions, merge_rounds, render_markdown, CompareOptions};
 use anyhow::{anyhow, bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -75,9 +79,59 @@ pub fn execute(args: PerfVsArgs) -> Result<Outcome> {
         wt_path.display()
     );
 
+    // Warm-up pass: builds both sides and runs each once, discarded.
+    build_and_run_all(
+        &repo_root,
+        &benches,
+        "head",
+        &head_sha,
+        &iso,
+        true,
+        args.verbose,
+    )?;
+    build_and_run_all(
+        &wt_path,
+        &benches,
+        "base",
+        &base_sha,
+        &iso,
+        true,
+        args.verbose,
+    )?;
+
+    let mut head_rounds = Vec::with_capacity(args.rounds as usize);
+    let mut base_rounds = Vec::with_capacity(args.rounds as usize);
+    for round in 0..args.rounds {
+        eprintln!("perf-vs: round {}/{}", round + 1, args.rounds);
+        let base_first = round % 2 == 0;
+        for run_base in [base_first, !base_first] {
+            if run_base {
+                base_rounds.push(build_and_run_all(
+                    &wt_path,
+                    &benches,
+                    "base",
+                    &base_sha,
+                    &iso,
+                    false,
+                    args.verbose,
+                )?);
+            } else {
+                head_rounds.push(build_and_run_all(
+                    &repo_root,
+                    &benches,
+                    "head",
+                    &head_sha,
+                    &iso,
+                    false,
+                    args.verbose,
+                )?);
+            }
+        }
+    }
     let head_report =
-        build_and_run_all(&repo_root, &benches, "head", &head_sha, &iso, args.verbose)?;
-    let base_report = build_and_run_all(&wt_path, &benches, "base", &base_sha, &iso, args.verbose)?;
+        merge_rounds(&head_rounds).ok_or_else(|| anyhow!("no head rounds were run"))?;
+    let base_report =
+        merge_rounds(&base_rounds).ok_or_else(|| anyhow!("no base rounds were run"))?;
 
     let head_json = out_dir.join("head.json");
     let base_json = out_dir.join("base.json");
@@ -248,11 +302,12 @@ fn build_and_run_all(
     side: &str,
     sha: &str,
     iso: &Isolation,
+    build: bool,
     verbose: bool,
 ) -> Result<RunReport> {
     let mut merged: Option<RunReport> = None;
     for b in benches {
-        let report = build_and_run(cwd, *b, side, sha, iso, verbose)
+        let report = build_and_run(cwd, *b, side, sha, iso, build, verbose)
             .with_context(|| format!("running {} on {}", bench_slug(*b), side))?;
         match merged.as_mut() {
             None => merged = Some(report),
@@ -271,13 +326,14 @@ fn build_and_run(
     side: &str,
     sha: &str,
     iso: &Isolation,
+    build: bool,
     verbose: bool,
 ) -> Result<RunReport> {
     let bin = bench_binary(bench);
     let stdout_str = if iso.is_microvm() {
         build_and_run_microvm(cwd, bin, bench, side, iso)?
     } else {
-        build_and_run_host(cwd, bin, bench, side, verbose)?
+        build_and_run_host(cwd, bin, bench, side, build, verbose)?
     };
 
     // Big-diff-bench interleaves `METRIC k=v` lines (for the autoresearch
@@ -303,18 +359,30 @@ fn build_and_run(
     Ok(report)
 }
 
-/// Build + run the bench directly on the host (the default path). Returns
-/// the runner's captured stdout.
+/// Run the bench directly on the host (the default path), building it first
+/// when `build` is set. Returns the runner's captured stdout.
 fn build_and_run_host(
     cwd: &Path,
     bin: &str,
     bench: PerfBenchArg,
     side: &str,
+    build: bool,
     verbose: bool,
 ) -> Result<String> {
+    if build {
+        cargo_build(cwd, bin, side, verbose)?;
+    }
+    run_host(cwd, bin, bench, side, verbose)
+}
+
+fn cargo_build(cwd: &Path, bin: &str, side: &str, verbose: bool) -> Result<()> {
     eprintln!("perf-vs: building {} ({})", bin, side);
+    // Pin the target dir per side: a shared CARGO_TARGET_DIR (or
+    // `build.target-dir` config) would have the base build overwrite HEAD's
+    // binary and break the `<cwd>/target/release` lookup below.
     let build_status = Command::new("cargo")
         .args(["build", "--release", "--bin", bin])
+        .env("CARGO_TARGET_DIR", cwd.join("target"))
         .current_dir(cwd)
         .stdout(if verbose {
             Stdio::inherit()
@@ -327,7 +395,16 @@ fn build_and_run_host(
     if !build_status.success() {
         bail!("cargo build {} failed (status {})", bin, build_status);
     }
+    Ok(())
+}
 
+fn run_host(
+    cwd: &Path,
+    bin: &str,
+    bench: PerfBenchArg,
+    side: &str,
+    verbose: bool,
+) -> Result<String> {
     let bin_path = cwd.join("target/release").join(bin);
     if !bin_path.exists() {
         bail!(

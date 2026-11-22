@@ -326,6 +326,130 @@ pub fn welch_t(a: &[f64], b: &[f64]) -> WelchResult {
     }
 }
 
+/// Largest number of group relabelings [`permutation_rank_sum`] enumerates
+/// exactly (9 vs 9 rounds is 48,620). Above it the test samples relabelings.
+const EXACT_PERMUTATION_LIMIT: u64 = 50_000;
+
+/// Relabelings drawn when the exact enumeration would exceed
+/// [`EXACT_PERMUTATION_LIMIT`].
+const SAMPLED_PERMUTATIONS: u32 = 20_000;
+
+/// Fixed seed for the sampled path, so a verdict is reproducible run to run.
+const PERMUTATION_SEED: u64 = 0x5eed_aa7e;
+
+/// Permutation (exact Mann–Whitney) rank-sum test for small groups.
+///
+/// The statistic is the distance of `a`'s mid-rank sum from its expectation;
+/// the two-tailed p-value is the share of group relabelings at least that
+/// extreme. Exact when the relabelings fit in [`EXACT_PERMUTATION_LIMIT`],
+/// otherwise a deterministic Monte-Carlo estimate. Built for a handful of
+/// *round medians* per side, where [`mann_whitney_u`]'s normal approximation
+/// is unreliable. Rank-based, so one outlier round can't drive it. The
+/// smallest attainable p is `2 / C(n_a + n_b, n_a)`: 3 vs 3 rounds can never
+/// reach 0.05, 4 vs 4 can (≈ 0.029), 5 vs 5 reaches ≈ 0.008.
+///
+/// Returns `1.0` when either side is empty.
+pub fn permutation_rank_sum(a: &[f64], b: &[f64]) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 1.0;
+    }
+    let pooled: Vec<f64> = a.iter().chain(b).copied().collect();
+    let ranks = mid_ranks(&pooled);
+    let n = ranks.len();
+    let k = a.len();
+    let expected = k as f64 * (n as f64 + 1.0) / 2.0;
+    let observed = (ranks[..k].iter().sum::<f64>() - expected).abs();
+    // Tolerance so relabelings that tie the observed split count as "≥".
+    let cutoff = observed - 1e-9;
+
+    match binomial(n as u64, k as u64) {
+        Some(total) if n < 64 && total <= EXACT_PERMUTATION_LIMIT => {
+            let mut hits = 0u64;
+            let mut mask: u64 = (1u64 << k) - 1;
+            for _ in 0..total {
+                let sum: f64 = ranks
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| mask >> i & 1 == 1)
+                    .map(|(_, r)| r)
+                    .sum();
+                if (sum - expected).abs() >= cutoff {
+                    hits += 1;
+                }
+                mask = next_combination(mask);
+            }
+            hits as f64 / total as f64
+        }
+        _ => {
+            let mut rng = PERMUTATION_SEED;
+            let mut shuffled = ranks;
+            let mut hits = 0u32;
+            for _ in 0..SAMPLED_PERMUTATIONS {
+                for i in (1..n).rev() {
+                    let j = (splitmix64(&mut rng) % (i as u64 + 1)) as usize;
+                    shuffled.swap(i, j);
+                }
+                if (shuffled[..k].iter().sum::<f64>() - expected).abs() >= cutoff {
+                    hits += 1;
+                }
+            }
+            (hits as f64 + 1.0) / (SAMPLED_PERMUTATIONS as f64 + 1.0)
+        }
+    }
+}
+
+/// 1-based ranks with ties sharing their average rank, in input order.
+fn mid_ranks(xs: &[f64]) -> Vec<f64> {
+    let mut order: Vec<usize> = (0..xs.len()).collect();
+    order.sort_by(|&i, &j| {
+        xs[i]
+            .partial_cmp(&xs[j])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut ranks = vec![0.0; xs.len()];
+    let mut i = 0;
+    while i < order.len() {
+        let mut j = i;
+        while j + 1 < order.len() && xs[order[j + 1]] == xs[order[i]] {
+            j += 1;
+        }
+        let rank = (i + j) as f64 / 2.0 + 1.0;
+        for &idx in &order[i..=j] {
+            ranks[idx] = rank;
+        }
+        i = j + 1;
+    }
+    ranks
+}
+
+/// `C(n, k)`, or `None` on overflow.
+fn binomial(n: u64, k: u64) -> Option<u64> {
+    let k = k.min(n - k);
+    let mut acc: u64 = 1;
+    for i in 0..k {
+        acc = acc.checked_mul(n - i)? / (i + 1);
+    }
+    Some(acc)
+}
+
+/// Gosper's hack: the next larger integer with the same number of set bits.
+fn next_combination(mask: u64) -> u64 {
+    let lowest = mask & mask.wrapping_neg();
+    let ripple = mask.wrapping_add(lowest);
+    if ripple == 0 {
+        return 0;
+    }
+    ripple | (((mask ^ ripple) >> 2) / lowest)
+}
+
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// Mann–Whitney U test (Wilcoxon rank-sum). Non-parametric: tests whether `a`
 /// and `b` are stochastically shifted, without any distributional assumption.
 ///

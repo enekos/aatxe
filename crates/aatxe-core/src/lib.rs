@@ -13,12 +13,14 @@ pub mod affected;
 pub mod compare;
 pub mod github;
 pub mod report;
+pub mod rounds;
 pub mod secret;
 pub mod stats;
 pub mod types;
 
 pub use compare::{compare_reports, has_regressions, CompareOptions};
 pub use report::{render_markdown, STICKY_MARKER};
+pub use rounds::merge_rounds;
 pub use types::{
     AffectedScope, BenchDiff, BenchRun, CompareReport, NeutralReason, RunReport, Verdict,
     SCHEMA_VERSION,

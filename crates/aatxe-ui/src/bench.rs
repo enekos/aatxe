@@ -171,6 +171,7 @@ pub(crate) mod test_support {
                 p50: median,
                 p95: median,
                 p99: median,
+                round_medians: Vec::new(),
                 metrics: vec![],
                 tags: vec![],
             }],
