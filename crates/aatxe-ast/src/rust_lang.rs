@@ -130,7 +130,7 @@ fn walk(
         "use_declaration" => {
             // Capture the entire `use foo::bar::Baz;` body as one import
             // entry. Verbatim — splitting `use {a, b};` into individual
-            // imports is more code than the council needs.
+            // imports is more code than callers need.
             if let Some(arg) = node.child_by_field_name("argument") {
                 let text = arg.utf8_text(bytes).unwrap_or("").trim();
                 if !text.is_empty() && !imports.iter().any(|s| s == text) {
@@ -378,9 +378,7 @@ fn named_children(node: Node) -> Vec<Node> {
 /// Naive but useful: scan the source for `name(` callsites whose `name`
 /// is one of the file's own declared symbols, and attribute the edge
 /// to the enclosing symbol. We don't try to be precise — false positives
-/// here are harmless (the council prompt is already noisy enough that an
-/// extra edge won't sway the model), and false negatives just shrink the
-/// "called by" lists in `scope.rs`.
+/// here are harmless, and false negatives just shrink the call graph.
 fn call_edges(symbols: &[LogicSymbol], source: &str) -> Vec<LogicEdge> {
     let mut ids_by_name: HashMap<&str, &str> = HashMap::new();
     for s in symbols {

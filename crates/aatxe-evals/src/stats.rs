@@ -4,7 +4,7 @@
 //! ## Why synthetic
 //!
 //! The deterministic stats engine is the part of aatxe most consumers
-//! actually depend on (the gate fires every PR; the council is opt-in).
+//! actually depend on (the gate fires every PR).
 //! Unit tests prove individual statistics are correct on hand-picked
 //! inputs. What we want to know operationally is:
 //!

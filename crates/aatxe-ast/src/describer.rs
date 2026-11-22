@@ -19,7 +19,7 @@ use tree_sitter::Parser;
 ///
 /// The interface is intentionally side-effect-free. Parsers, tree-sitter
 /// state, scratch buffers — all of that is per-describer-impl business;
-/// the council never sees it.
+/// callers never see it.
 pub trait LanguageDescriber: Send + Sync {
     /// Short identifier (`"ts"`, `"go"`, `"rust"`, `"regex"`). Matched
     /// against [`Language`] variants in [`describe`].
@@ -34,8 +34,8 @@ pub trait LanguageDescriber: Send + Sync {
 /// Convenience: pick the right describer for a [`Language`] and parse.
 ///
 /// Falls back to the regex extractor when the matching language feature
-/// is compiled out, so the council degrades gracefully on partial-feature
-/// builds instead of going scope-blind.
+/// is compiled out, so partial-feature builds degrade gracefully instead
+/// of returning nothing.
 pub fn describe(lang: Language, file_path: &str, source: &str) -> FileGraph {
     #[cfg(feature = "lang-ts")]
     if lang == Language::Ts {
@@ -127,8 +127,7 @@ impl ParserPool {
     }
 
     /// Return a parser to the pool. A poisoned mutex silently drops the
-    /// parser; we'd rather leak one parser than panic in the council's
-    /// hot path.
+    /// parser; we'd rather leak one parser than panic in the hot path.
     pub fn give(&self, p: Parser) {
         if let Ok(mut v) = self.inner.lock() {
             v.push(p);

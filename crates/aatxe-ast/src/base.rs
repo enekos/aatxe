@@ -6,10 +6,8 @@
 //! as the explicit unsupported-language fallback and as the off-feature
 //! default in [`crate::describer::describe`].
 //!
-//! Precision is intentionally weak; the council will *additionally* see
-//! the diff and full file context, so a missed symbol just means the
-//! prompt's "Symbol scope" section is shorter — not that the review is
-//! wrong. False positives are more painful than misses, so the patterns
+//! Precision is intentionally weak: a missed symbol just means a smaller
+//! graph, not a wrong one. False positives are more painful than misses, so the patterns
 //! err on the side of skipping ambiguous matches (e.g. `if (` is never
 //! treated as a method call).
 

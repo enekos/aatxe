@@ -2,9 +2,7 @@
 //! `aatxe-ast::describe`.
 //!
 //! Lives in the CLI binary (not in `aatxe-core`) so the pure-logic crate
-//! stays free of the tree-sitter grammars. The CLI is already shipping
-//! those grammars for the council's scope block; reusing them here costs
-//! nothing extra.
+//! stays free of the tree-sitter grammars.
 //!
 //! Behaviour matches `aatxe-core::affected::extract_specifiers` shape so
 //! downstream `resolve_import` stays untouched: every returned string is

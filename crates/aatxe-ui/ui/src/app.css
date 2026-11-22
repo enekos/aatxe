@@ -123,7 +123,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .badge.neutral { background: rgba(138,145,163,.12); color: var(--dim); }
 .badge.new { background: rgba(79,143,224,.15); color: var(--blue); }
 .badge.removed, .badge.out-of-scope { background: rgba(216,162,58,.15); color: var(--yellow); }
-.badge.crit { background: rgba(224,69,47,.25); color: var(--red); font-weight: 700; }
 
 .transcript {
   max-height: 320px; overflow-y: auto; background: var(--bg);
@@ -137,12 +136,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .transcript .k-system { color: var(--yellow); }
 .transcript .k-stderr { color: var(--red); }
 
-pre.council, pre.diffview {
+pre.diffview {
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
   padding: 10px; overflow-x: auto; font-size: 12px; white-space: pre-wrap;
   max-height: 420px; overflow-y: auto;
 }
-.council-chips { display: flex; gap: 8px; margin-bottom: 8px; }
 
 .lb-rank { font-weight: 700; color: var(--yellow); }
 .lb-first td { background: rgba(63,185,107,.07); }

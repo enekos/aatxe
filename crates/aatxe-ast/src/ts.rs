@@ -1,8 +1,7 @@
 //! Tree-sitter TypeScript describer.
 //!
 //! Modelled on mairu's `treesitter_ts.go` (the heaviest reference at
-//! 529 LOC) but trimmed to the symbol classes the council prompt
-//! actually needs: `function` declarations, `class` declarations and
+//! 529 LOC) but trimmed to the symbol classes aatxe actually needs: `function` declarations, `class` declarations and
 //! their `method_definition`s, top-level `const`/`let`/`var` bindings
 //! whose initializer is an arrow function, and `import` targets. The
 //! intra-file call graph attributes by enclosing function.
@@ -792,7 +791,7 @@ adminRouter.get("/users/:id/export", requireAuth, async (req, res) => {
     #[test]
     fn router_get_with_no_callback_arg_emits_no_symbol() {
         // Just a string literal — no handler. We should NOT emit a
-        // symbol because there's no callable to point the council at.
+        // symbol because there's no callable to point at.
         let g = describe("adminRouter.get(\"/path\");\n");
         for s in &g.symbols {
             assert!(

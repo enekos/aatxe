@@ -1,7 +1,7 @@
 //! Agent runners: turn a task prompt + worktree into a stream of
 //! [`AgentOutputKind`] events and an exit code.
 //!
-//! Two backends, same pattern as the council's `LlmClient` seam:
+//! Three backends behind one seam:
 //!
 //! * `ClaudeCode` shells out to the local `claude` CLI in print mode with
 //!   `--output-format stream-json`, exactly how aatxe already shells out
@@ -13,8 +13,8 @@
 //!   end-to-end with zero network and zero LLM spend. Used by tests and
 //!   by `aatxe ui --agent-backend stub` demo runs.
 //! * `Gemini` is a *native* tool-use loop over the Gemini API (no local
-//!   agent CLI exists for it) — see [`crate::gemini`]. One
-//!   `GEMINI_API_KEY` drives both this and the council's gemini backend.
+//!   agent CLI exists for it) — see [`crate::gemini`]. Needs
+//!   `GEMINI_API_KEY`.
 
 use crate::events::AgentOutputKind;
 use crate::gemini::{run_gemini_agent, GeminiAgentConfig};
@@ -42,9 +42,9 @@ pub enum AgentBackend {
     },
 }
 
-/// The default tool surface for a coding agent. Wider than the council's
-/// read-only set on purpose: the agent's whole job is to edit and build,
-/// and it is confined to a throwaway worktree on a dedicated branch.
+/// The default tool surface for a coding agent. Includes write tools on
+/// purpose: the agent's whole job is to edit and build, and it is confined
+/// to a throwaway worktree on a dedicated branch.
 pub fn default_allowed_tools() -> Vec<String> {
     ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
         .into_iter()

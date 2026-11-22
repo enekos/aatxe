@@ -5,14 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Eval harness for aatxe — scores the council pipeline against labeled PR diffs and the stats engine against synthetic ground-truth benchmark pairs."
+description = "Eval harness for aatxe — scores the stats engine against synthetic ground-truth benchmark pairs."
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
 aatxe-core = { path = "../aatxe-core" }
-aatxe-council = { path = "../aatxe-council" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

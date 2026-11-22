@@ -1,11 +1,11 @@
 //! Agent lifecycle: spawn in an isolated worktree, poll for edits, bench
-//! every iteration, council on completion.
+//! every iteration, commit on completion.
 //!
 //! ```text
 //! spawn ─► git worktree add -b aatxe-ui/<session>-<id> … <base-sha>
 //!       ─► runner task (claude -p … | stub)
 //!       ─► poll loop: dirty-hash changed? ─► bench head ─► compare vs base ─► emit
-//!       ─► on exit: commit, final bench, council diff, standings, AgentExited
+//!       ─► on exit: commit, final bench, standings, AgentExited
 //! ```
 //!
 //! The base side is benched **once per session** (shared
@@ -19,10 +19,9 @@
 //! the authoritative one.
 
 use crate::bench::run_bench;
-use crate::council;
 use crate::events::{AgentOutputKind, UiEvent};
 use crate::runner::{run_agent, EmitFn};
-use crate::state::{AgentRecord, CouncilMode, SharedState};
+use crate::state::{AgentRecord, SharedState};
 use crate::tournament::compute_standings;
 use aatxe_core::compare_reports;
 use aatxe_core::types::RunReport;
@@ -211,7 +210,6 @@ pub async fn spawn_agent(state: SharedState, req: SpawnRequest) -> Result<String
         iterations: 0,
         done: false,
         latest_compare: None,
-        council_critical: None,
     };
     if let Ok(mut agents) = state.agents.lock() {
         agents.insert(agent_id.clone(), record);
@@ -288,7 +286,7 @@ async fn run_lifecycle(state: SharedState, agent_id: &str, task: &str, wt: &Path
     };
 
     // Finalize: stage + commit whatever the agent left, so the branch is
-    // durable and the council diff is well-defined.
+    // durable.
     let pre_commit_hash = dirty_hash(wt).await.unwrap_or(last_benched);
     git(&["add", "-A"], wt).await.ok();
     let staged = git(&["diff", "--cached", "--name-only"], wt)
@@ -312,17 +310,6 @@ async fn run_lifecycle(state: SharedState, agent_id: &str, task: &str, wt: &Path
     if pre_commit_hash != last_benched || (iterations == 0 && !branch_diff.is_empty()) {
         iterations += 1;
         run_iteration(&state, agent_id, iterations, wt).await;
-    }
-
-    // Council lane.
-    if state.cfg.council != CouncilMode::Off {
-        if branch_diff.trim().is_empty() {
-            state.bus.emit(UiEvent::Notice {
-                message: format!("{agent_id}: empty diff, council skipped"),
-            });
-        } else {
-            run_council_lane(&state, agent_id, wt, &branch_diff).await;
-        }
     }
 
     mark_done(&state, agent_id);
@@ -362,48 +349,6 @@ async fn run_iteration(state: &SharedState, agent_id: &str, iteration: u32, wt: 
         state.bus.emit(UiEvent::IterationFailed {
             agent_id: agent_id.to_string(),
             iteration,
-            error: format!("{e:#}"),
-        });
-    }
-    update_standings(state, agent_id);
-}
-
-async fn run_council_lane(state: &SharedState, agent_id: &str, wt: &Path, diff: &str) {
-    state.bus.emit(UiEvent::CouncilStarted {
-        agent_id: agent_id.to_string(),
-    });
-    let out_dir = state.cfg.session_dir.join("agents").join(agent_id);
-    let result: Result<()> = async {
-        std::fs::create_dir_all(&out_dir)?;
-        let diff_path = out_dir.join("council.diff");
-        std::fs::write(&diff_path, diff)?;
-        let (counts, markdown) = council::run_council(
-            &state.cfg.aatxe_bin,
-            state.cfg.council,
-            &diff_path,
-            &out_dir,
-            wt,
-            state.cfg.confidence_floor,
-        )
-        .await?;
-        if let Ok(mut agents) = state.agents.lock() {
-            if let Some(r) = agents.get_mut(agent_id) {
-                r.council_critical = Some(counts.critical);
-            }
-        }
-        state.bus.emit(UiEvent::CouncilVerdict {
-            agent_id: agent_id.to_string(),
-            critical: counts.critical,
-            major: counts.major,
-            shippable: counts.shippable,
-            markdown,
-        });
-        Ok(())
-    }
-    .await;
-    if let Err(e) = result {
-        state.bus.emit(UiEvent::CouncilFailed {
-            agent_id: agent_id.to_string(),
             error: format!("{e:#}"),
         });
     }

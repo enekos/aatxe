@@ -1,7 +1,7 @@
 //! Microbenchmarks for the aatxe **statistical brain** — `aatxe-core`.
 //!
-//! This is the most meta bench in the repo: every other bench (council,
-//! big-diff, ast, the language SDKs) funnels its raw samples through
+//! This is the most meta bench in the repo: every other bench (ast, the
+//! language SDKs) funnels its raw samples through
 //! [`aatxe_core::stats::summarize_samples`], and every CI gate funnels two
 //! `RunReport`s through [`aatxe_core::compare::compare_reports`]. Those two
 //! functions — plus the Mann–Whitney U ranker that produces the verdict's

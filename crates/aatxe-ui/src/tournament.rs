@@ -1,15 +1,14 @@
-//! Tournament standings: rank K agents working the same task by the only
-//! judges that matter here — the perf gate and the council.
+//! Tournament standings: rank K agents working the same task by the judge
+//! that matters here — the perf gate.
 //!
 //! Scoring rule (documented in the UI footer as well):
 //!
 //! ```text
-//! score = improvements − 2·regressions − 1.5·council_criticals
+//! score = improvements − 2·regressions
 //! ```
 //!
-//! Regressions cost double for the same reason learning-corpus
-//! refutations do: a confidently-shipped slowdown is worse than a missed
-//! win. Ties break on the summed median delta (more negative = net
+//! Regressions cost double: a confidently-shipped slowdown is worse than
+//! a missed win. Ties break on the summed median delta (more negative = net
 //! faster code wins).
 
 use crate::events::Standing;
@@ -34,9 +33,7 @@ pub fn compute_standings(records: &[AgentRecord]) -> Vec<Standing> {
                 ),
                 None => (0, 0, 0.0),
             };
-            let criticals = r.council_critical.unwrap_or(0);
-            let score =
-                f64::from(improvements) - 2.0 * f64::from(regressions) - 1.5 * f64::from(criticals);
+            let score = f64::from(improvements) - 2.0 * f64::from(regressions);
             Standing {
                 agent_id: r.agent_id.clone(),
                 name: r.name.clone(),
@@ -44,7 +41,6 @@ pub fn compute_standings(records: &[AgentRecord]) -> Vec<Standing> {
                 score,
                 regressions,
                 improvements,
-                council_critical: r.council_critical,
                 median_delta_sum: delta_sum,
             }
         })
@@ -66,8 +62,7 @@ pub fn compute_standings(records: &[AgentRecord]) -> Vec<Standing> {
 }
 
 /// Strategy hints injected per tournament slot so the K agents explore
-/// the solution space instead of converging on one approach — the same
-/// heterogeneity-via-personas idea the council uses for proposers.
+/// the solution space instead of converging on one approach.
 pub const STRATEGY_HINTS: &[&str] = &[
     "minimal-diff: smallest change that achieves the goal",
     "performance-first: optimize the hot path even at some complexity cost",
@@ -83,7 +78,7 @@ mod tests {
     use aatxe_core::types::{CompareReport, CompareSide, CompareSummary, Language};
     use std::path::PathBuf;
 
-    fn record(id: &str, cmp: Option<CompareReport>, criticals: Option<u32>) -> AgentRecord {
+    fn record(id: &str, cmp: Option<CompareReport>) -> AgentRecord {
         AgentRecord {
             agent_id: id.into(),
             name: id.into(),
@@ -94,7 +89,6 @@ mod tests {
             iterations: 1,
             done: false,
             latest_compare: cmp,
-            council_critical: criticals,
         }
     }
 
@@ -135,24 +129,22 @@ mod tests {
     }
 
     #[test]
-    fn improvements_beat_regressions_and_criticals_cost() {
+    fn improvements_beat_regressions() {
         let records = vec![
-            record("clean-win", Some(cmp_with(0, 2, -0.10)), Some(0)),
-            record("regressed", Some(cmp_with(1, 2, 0.05)), Some(0)),
-            record("critical-flagged", Some(cmp_with(0, 2, -0.08)), Some(2)),
+            record("regressed", Some(cmp_with(1, 2, 0.05))),
+            record("clean-win", Some(cmp_with(0, 2, -0.10))),
         ];
         let s = compute_standings(&records);
         assert_eq!(s[0].agent_id, "clean-win");
         assert_eq!(s[0].rank, 1);
-        assert_eq!(s[1].agent_id, "regressed"); // 2 - 2 = 0 beats 2 - 3 = -1
-        assert_eq!(s[2].agent_id, "critical-flagged");
+        assert_eq!(s[1].agent_id, "regressed"); // 2 - 2 = 0
     }
 
     #[test]
     fn tie_breaks_on_net_speedup() {
         let records = vec![
-            record("slower", Some(cmp_with(0, 1, 0.02)), None),
-            record("faster", Some(cmp_with(0, 1, -0.07)), None),
+            record("slower", Some(cmp_with(0, 1, 0.02))),
+            record("faster", Some(cmp_with(0, 1, -0.07))),
         ];
         let s = compute_standings(&records);
         assert_eq!(s[0].agent_id, "faster");
@@ -161,8 +153,8 @@ mod tests {
     #[test]
     fn agents_without_data_rank_at_zero_score() {
         let records = vec![
-            record("no-data", None, None),
-            record("winner", Some(cmp_with(0, 1, -0.01)), None),
+            record("no-data", None),
+            record("winner", Some(cmp_with(0, 1, -0.01))),
         ];
         let s = compute_standings(&records);
         assert_eq!(s[0].agent_id, "winner");

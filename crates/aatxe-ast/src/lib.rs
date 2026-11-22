@@ -1,8 +1,8 @@
 //! # aatxe-ast
 //!
-//! AST-based scope inspection so the aatxe council reasons about
-//! symbol-level scope (callers, signatures, control flow, import graph)
-//! instead of re-inferring it from flat diff text.
+//! Tree-sitter symbol and import extraction for TS / Go / Rust. The
+//! import edges ([`FileGraph::file_edges`]) feed the `--affected`
+//! resolver, which decides which benches a PR diff can touch.
 //!
 //! Pure crate: no IO, no globals, no parser-grammar state leakage. Parsing
 //! takes `&str`, returns owned [`FileGraph`]. Tree-sitter grammars are
@@ -27,20 +27,9 @@
 //!     println!("{}: {} @ {}", s.kind, s.name, s.line);
 //! }
 //! ```
-//!
-//! ## Rendering for the council prompt
-//!
-//! After describing every file the council will see, build the prompt
-//! block with [`scope::render_scope_block`]:
-//!
-//! ```ignore
-//! let block = aatxe_ast::scope::render_scope_block(&graphs, &changed_paths);
-//! // Pass `block` to `aatxe_council::CouncilOptions::ast_scope`.
-//! ```
 
 pub mod base;
 pub mod describer;
-pub mod scope;
 pub mod types;
 
 #[cfg(feature = "lang-go")]
@@ -51,7 +40,6 @@ mod rust_lang;
 mod ts;
 
 pub use describer::{describe, language_for_path, LanguageDescriber, ParserPool};
-pub use scope::render_scope_block;
 pub use types::{FileGraph, LogicEdge, LogicSymbol, SymbolKind};
 
 pub use aatxe_core::types::Language;

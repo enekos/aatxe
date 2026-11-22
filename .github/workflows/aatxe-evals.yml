@@ -1,46 +1,18 @@
 # aatxe-evals — the eval harness gate.
 #
-# Two surfaces, both exercised here:
-#   * stats engine evals: synthetic A/B benchmark pairs with known ground
-#     truth. Pure-Rust, deterministic. Always runs.
-#   * council quality evals: labeled diff fixtures in evals/council/cases/.
-#     Stub LLM by default — proves the harness is wired correctly without
-#     burning Moonshot quota. Flip to real Kimi via workflow_dispatch input
-#     `use-real-kimi=true` plus a `KIMI_API_KEY` repo secret.
+# Synthetic A/B benchmark pairs with known ground truth (null distribution,
+# known regression, known improvement, controlled noise, between-run drift),
+# scored against the comparator. Pure Rust, deterministic.
 #
-# The PR job gates on `evals/council/baselines/stub.json`: any headline
-# metric (critical recall, critical precision, severity calibration, judge
-# Brier, FP/case, null FPR, etc.) that regresses past tolerance fails the
-# build with exit code 2.
-#
-# A third mode — `calibrate=true` — re-runs the corpus at every floor in
-# `floors` (default `0.55 0.60 0.65`) and prints a side-by-side diff so
-# the project's `--confidence-floor` default can be tuned with data
-# instead of a guess. Calibration is workflow_dispatch only — stub-mode
-# sweeps finish in <30s, but real-LLM sweeps cost ~60min/floor and
-# shouldn't run on every PR.
+# Gates on `evals/baseline.json`: if the scenario pass rate drops, the null
+# false-positive rate rises, or borderline detection power drops past
+# tolerance, the build fails with exit code 2.
 
 name: aatxe-evals
 
 on:
   pull_request:
   workflow_dispatch:
-    inputs:
-      use-real-kimi:
-        description: "Set to 'true' to call the real Kimi API (otherwise the stub LLM is used)"
-        required: false
-        default: 'false'
-        type: string
-      calibrate:
-        description: "Set to 'true' to run the confidence-floor calibration sweep instead of the normal eval gate"
-        required: false
-        default: 'false'
-        type: string
-      floors:
-        description: "Space-separated floors to sweep when calibrate=true. Default '0.55 0.60 0.65'"
-        required: false
-        default: '0.55 0.60 0.65'
-        type: string
 
 permissions:
   contents: read
@@ -62,104 +34,22 @@ jobs:
       - name: Build aatxe
         run: cargo build --release -p aatxe
 
-      - name: Decide mode
-        id: mode
-        env:
-          USE_REAL: ${{ github.event.inputs.use-real-kimi }}
-          CALIBRATE: ${{ github.event.inputs.calibrate }}
-          HAS_KIMI: ${{ secrets.KIMI_API_KEY != '' }}
-        run: |
-          # Real-LLM mode requires both the input AND the secret.
-          if [ "$USE_REAL" = "true" ] && [ "$HAS_KIMI" = "true" ]; then
-            real_llm=1
-          else
-            real_llm=0
-          fi
-          calibrate=0
-          if [ "$CALIBRATE" = "true" ]; then
-            calibrate=1
-          fi
-          echo "real_llm=$real_llm" >> "$GITHUB_OUTPUT"
-          echo "calibrate=$calibrate" >> "$GITHUB_OUTPUT"
-          if [ "$calibrate" = "1" ]; then
-            echo "    → calibration sweep (real_llm=$real_llm)"
-          elif [ "$real_llm" = "1" ]; then
-            echo "    → using real Kimi"
-          else
-            echo "    → using stub LLM"
-          fi
-
-      - name: Run evals (stub mode + baseline gate)
-        if: steps.mode.outputs.calibrate == '0' && steps.mode.outputs.real_llm == '0'
-        env:
-          AATXE_COUNCIL_STUB: '1'
+      - name: Run evals + baseline gate
         run: |
           mkdir -p tmp
           ./target/release/aatxe evals \
             --out tmp/aatxe-evals.json \
             --markdown tmp/aatxe-evals.md \
-            --baseline evals/council/baselines/stub.json
-
-      - name: Run evals (real Kimi, no gate — informational)
-        if: steps.mode.outputs.calibrate == '0' && steps.mode.outputs.real_llm == '1'
-        env:
-          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
-          KIMI_BASE_URL: ${{ secrets.KIMI_BASE_URL }}
-          KIMI_MODEL: ${{ secrets.KIMI_MODEL }}
-        run: |
-          mkdir -p tmp
-          ./target/release/aatxe evals \
-            --council-real-llm \
-            --out tmp/aatxe-evals-real.json \
-            --markdown tmp/aatxe-evals-real.md \
-            --no-fail
-
-      # Calibration sweep — drives `scripts/calibrate-confidence-floor.sh`.
-      # `USE_REAL_KIMI=true` requires KIMI_API_KEY and pushes the sweep
-      # cost from <30s to ~60min/floor, so it's behind the real-Kimi
-      # input gate. Either way the gate-against-baseline step at the
-      # end of the script runs on the default-floor JSON, so a sweep
-      # that lowers the headline metric past tolerance will still trip
-      # exit 2.
-      - name: Run confidence-floor sweep
-        if: steps.mode.outputs.calibrate == '1'
-        env:
-          AATXE_COUNCIL_STUB: ${{ steps.mode.outputs.real_llm == '0' && '1' || '0' }}
-          USE_REAL_KIMI: ${{ steps.mode.outputs.real_llm == '1' && 'true' || 'false' }}
-          AATXE_FLOORS: ${{ github.event.inputs.floors }}
-          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
-          KIMI_BASE_URL: ${{ secrets.KIMI_BASE_URL }}
-          KIMI_MODEL: ${{ secrets.KIMI_MODEL }}
-        run: |
-          mkdir -p tmp
-          scripts/calibrate-confidence-floor.sh tmp ./target/release/aatxe
-
-      - name: Print summary
-        if: always()
-        run: |
-          for f in tmp/aatxe-evals.md tmp/aatxe-evals-real.md tmp/calibrate/floor-*.md; do
-            if [ -f "$f" ]; then
-              echo "=== $f ==="
-              head -80 "$f"
-              echo
-            fi
-          done
+            --baseline evals/baseline.json
 
       - name: Job summary
         if: always()
         run: |
-          echo "## Aatxe Evals" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          for f in tmp/aatxe-evals.md tmp/aatxe-evals-real.md; do
-            if [ -f "$f" ]; then
-              echo "<details><summary>$(basename "$f")</summary>" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-              head -60 "$f" >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-              echo "</details>" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          done
+          if [ -f tmp/aatxe-evals.md ]; then
+            echo "## Aatxe Evals" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat tmp/aatxe-evals.md >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload artefacts
         if: always()
@@ -167,6 +57,5 @@ jobs:
         with:
           name: aatxe-evals
           path: |
-            tmp/aatxe-evals*.json
-            tmp/aatxe-evals*.md
-            tmp/calibrate/
+            tmp/aatxe-evals.json
+            tmp/aatxe-evals.md

@@ -1,7 +1,7 @@
 # Self-bench workflow — aatxe gating its own performance with aatxe.
 #
 # The most meta lane in the repo: it builds aatxe's own microbenchmark
-# binaries (`core-bench`, `ast-bench`, `council-bench`) for HEAD and for the
+# binaries (`core-bench`, `ast-bench`) for HEAD and for the
 # PR base, runs them in interleaved rounds (base,head / head,base / …), and
 # pipes every round through `aatxe compare` — the exact comparator a
 # downstream consumer's gate uses. A regression in
@@ -60,7 +60,7 @@ env:
   THRESHOLD: ${{ github.event.inputs.threshold || '0.05' }}
   ALPHA: ${{ github.event.inputs.alpha || '0.05' }}
   ROUNDS: '8'
-  SERVICES: core ast council
+  SERVICES: core ast
 
 jobs:
   self-bench:
@@ -83,8 +83,7 @@ jobs:
           cargo build --release \
             --bin aatxe \
             --bin aatxe-core-bench \
-            --bin aatxe-ast-bench \
-            --bin aatxe-council-bench
+            --bin aatxe-ast-bench
           # Stash HEAD artefacts so the base build can't clobber them.
           mkdir -p /tmp/aatxe-bin/head /tmp/aatxe-bin/base
           cp target/release/aatxe /tmp/aatxe-bin/
