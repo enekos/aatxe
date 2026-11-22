@@ -377,8 +377,12 @@ fn build_and_run_host(
 
 fn cargo_build(cwd: &Path, bin: &str, side: &str, verbose: bool) -> Result<()> {
     eprintln!("perf-vs: building {} ({})", bin, side);
+    // Pin the target dir per side: a shared CARGO_TARGET_DIR (or
+    // `build.target-dir` config) would have the base build overwrite HEAD's
+    // binary and break the `<cwd>/target/release` lookup below.
     let build_status = Command::new("cargo")
         .args(["build", "--release", "--bin", bin])
+        .env("CARGO_TARGET_DIR", cwd.join("target"))
         .current_dir(cwd)
         .stdout(if verbose {
             Stdio::inherit()
