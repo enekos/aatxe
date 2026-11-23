@@ -6,7 +6,7 @@ Rust authoring API + JSON emitter for [aatxe](https://github.com/enekos/aatxe) â
 
 ```toml
 [dev-dependencies]
-aatxe-bench = "0.1"
+aatxe-bench = "0.2"
 ```
 
 Write a runner binary:

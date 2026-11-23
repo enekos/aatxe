@@ -93,7 +93,7 @@ AATXE_NO_CHECK=1 curl -fsSL https://raw.githubusercontent.com/enekos/aatxe/maste
 Alternative install paths:
 
 * **From source.** `git clone … && cargo install --path crates/aatxe`.
-* **Cargo.** Once published to crates.io: `cargo install aatxe`.
+* **Cargo.** `cargo install aatxe --locked` from crates.io.
 
 Releases are tag-driven — see `.github/workflows/release.yml` for the
 build matrix (darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64).

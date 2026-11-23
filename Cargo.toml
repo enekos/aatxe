@@ -13,9 +13,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/enekos/aatxe"
 description = "Statistical microbenchmark + regression-gate harness for TS, Go, and Rust"

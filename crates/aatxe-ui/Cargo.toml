@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Local realtime dashboard for aatxe: spawn coding agents in isolated worktrees and watch their benchmark trajectories live"
 
 [dependencies]
-aatxe-core = { path = "../aatxe-core" }
+aatxe-core = { path = "../aatxe-core", version = "0.2.0" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
