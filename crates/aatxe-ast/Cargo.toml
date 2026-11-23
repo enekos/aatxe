@@ -11,7 +11,7 @@ description = "Tree-sitter import and symbol extraction for TS/Go/Rust, feeding 
 path = "src/lib.rs"
 
 [dependencies]
-aatxe-core = { path = "../aatxe-core" }
+aatxe-core = { path = "../aatxe-core", version = "0.2.0" }
 regex = { workspace = true }
 once_cell = "1.20"
 
